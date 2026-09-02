@@ -1,0 +1,51 @@
+schema: spec-driven
+
+context: |
+  Project: Monitoreo de plagas y enfermedades.
+  Stack: Astro static site, React islands, TypeScript strict mode, Tailwind CSS via Vite, and local shadcn-style components.
+  Architecture: Browser-only demo today; future persistence MUST cross an API boundary and MUST NOT connect directly to a database.
+  Deployment: Static output is compatible with Vercel and an Nginx container on a VPS; Docker Compose provides local preview.
+  Domain: Crop, lot, bed, monitoring round, sample unit, organism, observation, derived metric, and data-quality issue.
+  Source quality: Legacy XLSX/XLSM/PDF/image material is reference and migration input, not an authoritative schema.
+  Product scope: Complete modernization is planned; this initialization phase MUST NOT implement product features.
+
+strict_tdd: false
+
+testing:
+  strict_tdd: false
+  reason: No automated test runner is currently configured in package.json or project files.
+  validation_command: npm run build
+  validation_details: "astro check followed by astro build"
+  unit: unavailable
+  integration: unavailable
+  e2e: unavailable
+  coverage: unavailable
+  linter: unavailable
+  formatter: unavailable
+  type_checker: "astro check (included in npm run build)"
+
+rules:
+  proposal:
+    - Define scope boundaries for the modernization and include rollback plans for risky infrastructure or data changes.
+    - Preserve existing source material and document assumptions that remain blocked by owner decisions.
+  specs:
+    - Use Given/When/Then scenarios and RFC 2119 keywords (MUST, SHALL, SHOULD, MAY).
+    - Preserve metric denominators and data provenance in requirements involving derived values or imports.
+  design:
+    - Document architecture decisions with rationale and include sequence diagrams for complex flows.
+    - Keep the frontend/API/database boundary explicit and deployment-neutral where hosting is not decided.
+  tasks:
+    - Group tasks by phase, use hierarchical numbering, and keep tasks completable in one session.
+    - Add tests or validation evidence for every behavior that can be automated.
+  apply:
+    guidelines:
+      - Follow existing Astro, React, TypeScript, Tailwind, and Docker conventions until an approved change supersedes them.
+      - Do not treat legacy workbook values as canonical without an explicit data-quality decision.
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: npm run build
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas or changing the treatment of legacy source data.
