@@ -1,13 +1,37 @@
 services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    environment:
+      API_PORT: 8787
+      AUTH_MODE: ${AUTH_MODE:-memory}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:8080}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+    expose:
+      - "8787"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8787/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   frontend:
     build:
       context: .
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8080/healthz"]
+      test: ["CMD", "wget", "--spider", "--quiet", "http://127.0.0.1:8080/healthz"]
       interval: 30s
       timeout: 5s
       retries: 3

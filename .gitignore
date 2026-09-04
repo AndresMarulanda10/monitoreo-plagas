@@ -9,6 +9,7 @@ coverage/
 
 # Local source workbooks and exports
 data/source/
+docs/base/
 *.xlsx
 *.xlsm
 *.xlsb
@@ -18,3 +19,5 @@ data/source/
 .idea/
 # Local AI runtime state
 .atl/
+.codegraph/
+supabase/.temp/

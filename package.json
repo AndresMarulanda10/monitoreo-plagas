@@ -5,19 +5,24 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
+    "api:dev": "tsx api/src/server.ts",
     "build": "astro check && astro build",
     "preview": "astro preview",
     "test": "vitest run",
-    "test:domain": "vitest run tests/domain"
+    "test:domain": "vitest run tests/domain",
+    "test:api": "vitest run tests/api"
   },
   "dependencies": {
     "@astrojs/react": "latest",
     "astro": "latest",
+    "@supabase/supabase-js": "latest",
     "react": "latest",
-    "react-dom": "latest"
+    "react-dom": "latest",
+    "tsx": "latest"
   },
   "devDependencies": {
     "@astrojs/check": "latest",
+    "@types/node": "latest",
     "@tailwindcss/vite": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",

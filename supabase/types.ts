@@ -8,10 +8,25 @@ export type Database = {
         Insert: Omit<Database['public']['Tables']['monitoring_configurations']['Row'], 'created_at'> & { created_at?: string };
         Update: Partial<Database['public']['Tables']['monitoring_configurations']['Insert']>;
       };
+      configuration_organisms: {
+        Row: { configuration_id: string; organism_id: string };
+        Insert: Database['public']['Tables']['configuration_organisms']['Row'];
+        Update: Partial<Database['public']['Tables']['configuration_organisms']['Insert']>;
+      };
       organisms: {
         Row: { id: string; name: string; created_at: string };
         Insert: Omit<Database['public']['Tables']['organisms']['Row'], 'created_at'> & { created_at?: string };
         Update: Partial<Database['public']['Tables']['organisms']['Insert']>;
+      };
+      beds: {
+        Row: { id: string; configuration_id: string; bed_number: number };
+        Insert: Database['public']['Tables']['beds']['Row'];
+        Update: Partial<Database['public']['Tables']['beds']['Insert']>;
+      };
+      plants: {
+        Row: { id: string; bed_id: string; plant_number: number };
+        Insert: Database['public']['Tables']['plants']['Row'];
+        Update: Partial<Database['public']['Tables']['plants']['Insert']>;
       };
       reviews: {
         Row: {

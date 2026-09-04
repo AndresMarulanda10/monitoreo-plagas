@@ -1,61 +1,47 @@
-# Monitoreo de plagas y enfermedades
+# Métrica Verde
 
-Frontend for recording and analyzing crop monitoring observations by lot, crop, bed, plant, and pest/disease.
+MVP para registrar y analizar monitoreo agrícola por configuración, cama, planta y organismo. El navegador habla únicamente con la API versionada; Supabase y sus secretos son responsabilidad del servidor.
 
-## Current status
+## Ruta rápida
 
-The first frontend slice is available as a local interactive monitoring-entry demo. It includes crop, lot, and bed context selectors, 0–3 severity controls for each plant, and an incidence summary per organism.
+1. Instala Node.js 22+ y ejecuta `npm install`.
+2. En una terminal ejecuta `npm run api:dev`.
+3. En otra ejecuta `PUBLIC_API_BASE_URL=http://localhost:8787 npm run dev`.
+4. Abre `http://localhost:4321` y crea un borrador. `Marcar todo 0` permite completar explícitamente la matriz antes de revisar excepciones.
 
-Read the initial analysis before development:
+La configuración local usa un adaptador de memoria y una sesión de desarrollo efímera. No es autenticación de producción ni persiste al reiniciar el proceso.
 
-- [Initial analysis](docs/initial-analysis.md)
-- [Stack and deployment proposal](docs/stack-proposal.md)
+## Producción Supabase
 
-## Source material
+1. Copia `.env.example` a un gestor de secretos, no al repositorio.
+2. Define `AUTH_MODE=supabase`, `SUPABASE_URL`, `SUPABASE_ANON_KEY` y `SUPABASE_SERVICE_ROLE_KEY` únicamente en el API.
+3. Aplica migraciones con `npx supabase db push` desde el proyecto Supabase.
+4. Regenera tipos después de cambios de esquema: `npx supabase gen types typescript --project-id <project-id> > supabase/types.ts`.
+5. Define `ALLOWED_ORIGINS` con los orígenes HTTPS exactos y usa `SameSite=None; Secure` en el proxy TLS.
 
-The original workbooks remain outside this repository because they contain the source data and live in a temporary WhatsApp container path. Their exact paths and a data-quality summary are recorded in the initial analysis.
+La clave service role omite RLS y nunca debe llegar al frontend. La autenticación de producción valida el token con Supabase Auth antes de consultar datos propios del observador.
 
-## Local development
-
-Requirements: Node.js 22 or newer and npm.
-
-```bash
-npm install
-npm run dev
-```
-
-Open the local URL printed by Astro, normally `http://localhost:4321`.
-
-Run the production build and preview it locally:
+## Verificación
 
 ```bash
+npm test
 npm run build
-npm run preview
+docker compose config
 ```
 
-## Docker preview
+El API expone `GET /healthz` sin autenticación y `GET /readyz` para comprobar la base de datos configurada. Compose publica el frontend en `http://localhost:8080` y enruta `/api/` hacia el servicio API.
 
-Build and serve the static output through Nginx on `http://localhost:8080`:
+## Flujo funcional
 
-```bash
-docker compose up --build
-```
+- Cinco configuraciones canónicas y ocho organismos son el único catálogo del MVP.
+- Severidad válida: entero `0`, `1`, `2` o `3`; una matriz completa exige las 8 coordenadas por cada planta.
+- Incidencia: plantas con score mayor que cero / plantas inspeccionadas.
+- Severidad: suma de scores / (plantas inspeccionadas × 3).
+- Los borradores son editables; las versiones enviadas son inmutables y las correcciones crean una nueva versión enlazada.
+- Tablero, tabla paginada y CSV comparten filtros y exponen `metrics.v1` y su procedencia.
 
-Stop the container with:
+## Límites conocidos
 
-```bash
-docker compose down
-```
+El MVP no importa libros históricos, no administra catálogos, no ofrece modo offline, fotos, tratamientos, alertas, mapas, PDF/XLSX, multi-tenancy ni reconciliación histórica. El adaptador Supabase requiere desplegar las funciones RPC de `supabase/migrations/003_version_lifecycle_rpc.sql`; la prueba local usa exclusivamente memoria.
 
-The image exposes `GET /healthz` for a basic container health check.
-
-## Data scope
-
-This slice is intentionally local-only. Form state is held in the browser, the save action only confirms the demo interaction, and no data is persisted or sent to an API/database. Demo crop, lot, bed, and plant values are client-side placeholders pending validated master data and data rules.
-
-## Next slices
-
-1. Define the authoritative data rules with the product owner.
-2. Connect the frontend to a validated API contract; the browser must not connect directly to the database.
-3. Replace the demo catalogs with validated crop, lot, bed, and plant master data.
-4. Add authenticated persistence and historical monitoring views behind the API boundary.
+Los archivos originales están en `docs/base/`, permanecen fuera del repositorio por `.gitignore` y son material de referencia/quarantine, nunca datos de producción.

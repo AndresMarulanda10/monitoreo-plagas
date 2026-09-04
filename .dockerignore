@@ -8,7 +8,10 @@ dist
 !.env.example
 coverage
 .DS_Store
+.atl
+.codegraph
 data/source
+docs/base
 *.xlsx
 *.xlsm
 *.xlsb
