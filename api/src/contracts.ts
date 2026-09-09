@@ -4,6 +4,10 @@ export type Severity = (typeof SEVERITIES)[number];
 export const WEEKLY_REVIEW_SLOTS = [1, 2] as const;
 export type ReviewSlot = (typeof WEEKLY_REVIEW_SLOTS)[number];
 
+export const REVIEW_AREAS = ['microbiology', 'entomology'] as const;
+export type ReviewArea = (typeof REVIEW_AREAS)[number];
+export type StoredReviewArea = ReviewArea | 'legacy';
+
 export const METRICS_FORMULA_VERSION = 'metrics.v1' as const;
 export type MetricGrain = 'review' | 'bed' | 'crop' | 'configuration';
 
@@ -35,6 +39,7 @@ export type ObservationEntry = {
 
 export type ReviewIdentity = {
   reviewId: string;
+  area: StoredReviewArea;
   configurationId: string;
   reviewWeek: string;
   reviewDate: string;
@@ -63,6 +68,7 @@ export type MetricProvenance = {
 };
 
 export type OrganismMetric = MetricProvenance & {
+  area: StoredReviewArea;
   organismId: string;
   incidenceNumerator: number;
   incidenceDenominator: number;

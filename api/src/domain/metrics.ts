@@ -6,8 +6,9 @@ import {
   type OrganismMetric,
   type Severity,
   type MetricGrain,
+  type StoredReviewArea,
 } from '../contracts';
-import { getOrganism, getRequiredCoordinates, getRequiredPlantIds, ORGANISMS } from './catalog';
+import { getOrganism, getOrganismsForArea, getRequiredCoordinates, getRequiredPlantIds } from './catalog';
 
 export type CompletenessResult = {
   complete: boolean;
@@ -26,10 +27,12 @@ function observationKey(plantId: string, organismId: string): string {
 
 export function validateObservationEntries(
   configuration: MonitoringConfiguration,
+  area: StoredReviewArea,
   entries: readonly ObservationEntry[],
 ): readonly ObservationEntry[] {
   const plantIds = new Set(getRequiredPlantIds(configuration));
-  const organismIds = new Set(ORGANISMS.map((organism) => organism.id));
+  const organisms = getOrganismsForArea(area);
+  const organismIds = new Set(organisms.map((organism) => organism.id));
   const seen = new Set<string>();
 
   for (const entry of entries as readonly unknown[]) {
@@ -60,16 +63,18 @@ export function validateObservationEntries(
 
 export function assessCompleteness(
   configuration: MonitoringConfiguration,
+  area: StoredReviewArea,
   entries: readonly ObservationEntry[],
 ): CompletenessResult {
-  validateObservationEntries(configuration, entries);
+  validateObservationEntries(configuration, area, entries);
   const present = new Set(entries.map((entry) => observationKey(entry.plantId, entry.organismId)));
-  const missing = getRequiredCoordinates(configuration).filter(
+  const required = getRequiredCoordinates(configuration, area);
+  const missing = required.filter(
     ({ plantId, organismId }) => !present.has(observationKey(plantId, organismId)),
   );
   return {
     complete: missing.length === 0,
-    expected: getRequiredCoordinates(configuration).length,
+    expected: required.length,
     actual: present.size,
     missing,
   };
@@ -79,9 +84,10 @@ export const checkCompleteness = assessCompleteness;
 
 export function assertCompleteMatrix(
   configuration: MonitoringConfiguration,
+  area: StoredReviewArea,
   entries: readonly ObservationEntry[],
 ): void {
-  const result = assessCompleteness(configuration, entries);
+  const result = assessCompleteness(configuration, area, entries);
   if (!result.complete) {
     throw new DomainValidationError('INCOMPLETE_MATRIX', 'Every plant and organism entry is required.', {
       expected: result.expected,
@@ -91,8 +97,8 @@ export function assertCompleteMatrix(
   }
 }
 
-export function isCompleteMatrix(configuration: MonitoringConfiguration, entries: readonly ObservationEntry[]): boolean {
-  return assessCompleteness(configuration, entries).complete;
+export function isCompleteMatrix(configuration: MonitoringConfiguration, area: StoredReviewArea, entries: readonly ObservationEntry[]): boolean {
+  return assessCompleteness(configuration, area, entries).complete;
 }
 
 export function roundPercentage(value: number): number {
@@ -101,6 +107,7 @@ export function roundPercentage(value: number): number {
 
 export type CalculateMetricsInput = {
   configuration: MonitoringConfiguration;
+  area: StoredReviewArea;
   reviewId: string;
   version: number;
   entries: readonly ObservationEntry[];
@@ -110,7 +117,7 @@ export type CalculateMetricsInput = {
 };
 
 export function calculateMetrics(input: CalculateMetricsInput): readonly OrganismMetric[] {
-  assertCompleteMatrix(input.configuration, input.entries);
+  assertCompleteMatrix(input.configuration, input.area, input.entries);
   const inspectedPlantIds = input.plantIds ?? getRequiredPlantIds(input.configuration);
   const configuredPlantIds = new Set(getRequiredPlantIds(input.configuration));
   if (inspectedPlantIds.some((plantId) => !configuredPlantIds.has(plantId))) {
@@ -125,7 +132,7 @@ export function calculateMetrics(input: CalculateMetricsInput): readonly Organis
   }
   const scope = new Set(inspectedPlantIds);
   const calculatedAt = input.calculatedAt ?? new Date().toISOString();
-  return ORGANISMS.map((organism) => {
+  return getOrganismsForArea(input.area).map((organism) => {
     const scores = input.entries
       .filter((entry) => entry.organismId === organism.id && scope.has(entry.plantId))
       .map((entry) => entry.severity);
@@ -134,6 +141,7 @@ export function calculateMetrics(input: CalculateMetricsInput): readonly Organis
     const severityDenominator = inspected * 3;
     return {
       organismId: organism.id,
+      area: input.area,
       grain: input.grain ?? 'review',
       formulaVersion: METRICS_FORMULA_VERSION,
       sourceReviewId: input.reviewId,
@@ -150,7 +158,7 @@ export function calculateMetrics(input: CalculateMetricsInput): readonly Organis
 }
 
 export function calculateMetric(input: CalculateMetricsInput, organismId: string): OrganismMetric {
-  if (!getOrganism(organismId)) {
+  if (!getOrganismsForArea(input.area).some((organism) => organism.id === organismId) || !getOrganism(organismId)) {
     throw new DomainValidationError('UNKNOWN_ORGANISM', 'Cannot calculate a metric for an unknown organism.', { organismId });
   }
   return calculateMetrics(input).find((metric) => metric.organismId === organismId)!;

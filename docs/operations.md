@@ -5,16 +5,16 @@ El camino operativo recomendado es un VPS con Compose, Nginx y Supabase gestiona
 ## Publicación
 
 1. Configura los secretos del API desde `.env.example` en el host.
-2. Ejecuta `npx supabase db push` desde un entorno controlado y verifica la migración `003_version_lifecycle_rpc.sql`.
+2. Antes de aplicar `005_review_area.sql`, inspecciona las filas existentes de `reviews`; la migración las conserva y marca explícitamente como `legacy`, elimina el índice global de slots y crea la unicidad por área. Después ejecuta `npx supabase db push` desde un entorno controlado y verifica las migraciones `003_version_lifecycle_rpc.sql` y `005_review_area.sql`.
 3. Construye y valida con `npm test`, `npm run build` y `docker compose config`.
 4. Ejecuta `docker compose up -d --build` y espera los health checks de `api` y `frontend`.
-5. Comprueba `/healthz`, `/readyz` y una sesión autenticada antes de cambiar el tráfico.
+5. Comprueba `/healthz`, `/readyz` y `POST /api/v1/session` (o una sesión autenticada si `AUTH_MODE=supabase`) antes de cambiar el tráfico.
 
 ## Variables
 
 | Variable | Propósito | Exposición |
 |---|---|---|
-| `AUTH_MODE` | `memory` local o `supabase` producción | API solamente |
+| `AUTH_MODE` | `open` acceso público intencional, `memory` local efímero o `supabase` con Auth | API solamente |
 | `SUPABASE_URL` | URL del proyecto | API solamente |
 | `SUPABASE_ANON_KEY` | Validación de Auth | API solamente |
 | `SUPABASE_SERVICE_ROLE_KEY` | Persistencia privilegiada server-side | API solamente, secreto |
@@ -24,10 +24,12 @@ El camino operativo recomendado es un VPS con Compose, Nginx y Supabase gestiona
 ## Salud Y Diagnóstico
 
 - `GET /healthz` confirma que el proceso HTTP responde.
-- `GET /readyz` confirma que Supabase responde cuando `AUTH_MODE=supabase`.
+- `GET /readyz` confirma que Supabase responde cuando el adaptador Supabase está configurado.
 - Los errores JSON mantienen `{ code, message, details }`; no se devuelven credenciales ni trazas.
-- Las mutaciones exigen sesión y rechazan origen cross-site.
-- `POST /api/v1/session` intercambia email/contraseña con Supabase Auth y deja el access token en una cookie HttpOnly; ese endpoint debe vivir detrás de TLS.
+- Las mutaciones exigen sesión en `memory` y `supabase`, y rechazan origen cross-site. En `open`, el API usa el observador técnico `guest-observer` sin credenciales.
+- `POST /api/v1/session` devuelve el observador técnico estable en `AUTH_MODE=open`; este modo no requiere credenciales y es acceso público intencional.
+- `microbiology` y `entomology` son áreas independientes de registro; `combined` es únicamente un filtro de reportes. Las revisiones `legacy` aparecen solo en el reporte Consolidado.
+- `POST /api/v1/session` intercambia email/contraseña con Supabase Auth y deja el access token en una cookie HttpOnly en `AUTH_MODE=supabase`; ese endpoint debe vivir detrás de TLS.
 
 ## Backups Y Recuperación
 

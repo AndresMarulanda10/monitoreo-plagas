@@ -4,12 +4,12 @@ import { createStore, StoreError, type ReviewRead, type ReviewStore } from './db
 import { CATALOG, findConfiguration, getConfigurationOrThrow, getRequiredPlantIds } from './domain/catalog';
 import { assertCompleteMatrix, calculateMetrics, validateObservationEntries, roundPercentage } from './domain/metrics';
 import { createReviewIdentity } from './domain/reviews';
-import type { MetricGrain, ObservationEntry, OrganismMetric, ReviewSlot } from './contracts';
+import { REVIEW_AREAS, type MetricGrain, type ObservationEntry, type OrganismMetric, type ReviewArea, type ReviewSlot, type StoredReviewArea } from './contracts';
 
 type AppOptions = {
   store?: ReviewStore;
   auth?: AuthResolver;
-  authMode?: 'memory' | 'supabase';
+  authMode?: 'open' | 'memory' | 'supabase';
   allowedOrigins?: readonly string[];
 };
 
@@ -22,13 +22,17 @@ class ApiError extends Error {
   }
 }
 
-type Filters = { configurationId?: string; crop?: string; bed?: string; organismId?: string; reviewId?: string; from?: string; to?: string };
+type ReportArea = ReviewArea | 'combined';
+type Filters = { area?: ReportArea; configurationId?: string; crop?: string; bed?: string; organismId?: string; reviewId?: string; from?: string; to?: string };
+const OPEN_GUEST_USER: AuthUser = { id: 'guest-observer', email: 'guest@local.test' };
 
 export function createApp(options: AppOptions = {}): (request: Request) => Promise<Response> {
   const store = options.store ?? createStore();
-  const mode = options.authMode ?? (process.env.AUTH_MODE === 'supabase' || (process.env.NODE_ENV === 'production' && !process.env.AUTH_MODE) ? 'supabase' : 'memory');
+  const mode = options.authMode ?? (process.env.AUTH_MODE === 'open' ? 'open' : process.env.AUTH_MODE === 'supabase' || (process.env.NODE_ENV === 'production' && !process.env.AUTH_MODE) ? 'supabase' : 'memory');
   const allowedOrigins = options.allowedOrigins ?? (process.env.ALLOWED_ORIGINS ?? 'http://localhost:4321,http://localhost:8080').split(',').map((origin) => origin.trim()).filter(Boolean);
-  const auth = options.auth ?? (mode === 'supabase'
+  const auth = options.auth ?? (mode === 'open'
+    ? async (): Promise<AuthUser> => ({ ...OPEN_GUEST_USER })
+    : mode === 'supabase'
     ? createSupabaseAuthResolver(requiredEnv('SUPABASE_URL'), requiredEnv('SUPABASE_ANON_KEY'))
     : async (request: Request): Promise<AuthUser | null> => {
       const cookie = readCookie(request, 'mp_session');
@@ -67,6 +71,7 @@ export function createApp(options: AppOptions = {}): (request: Request) => Promi
     }
 
     if (url.pathname === '/api/v1/session' && request.method === 'POST') {
+      if (mode === 'open') return json({ data: { user: { ...OPEN_GUEST_USER } } }, 200, commonHeaders);
       if (mode === 'memory') {
         commonHeaders.append('Set-Cookie', cookieHeader('mp_session', 'demo-observer', false));
         return json({ data: { user: { id: 'demo-observer', email: 'demo@local.test' } } }, 200, commonHeaders);
@@ -115,17 +120,21 @@ function isMutation(method: string): boolean {
 async function route(request: Request, url: URL, user: AuthUser, store: ReviewStore): Promise<{ body: unknown; status: number; contentType?: string }> {
   const path = url.pathname.slice('/api/v1'.length);
   if (path === '/catalog' && request.method === 'GET') return { body: { data: await store.getCatalog() }, status: 200 };
+  if (path === '/reviews/drafts' && request.method === 'GET') {
+    return { body: { data: await store.listDrafts(user.id, entryAreaValue(url.searchParams.get('area'))) }, status: 200 };
+  }
   if (path === '/reviews/drafts' && request.method === 'POST') {
     const input = await bodyOf(request);
+    const area = entryAreaValue(input.area);
     const configurationId = stringValue(input.configurationId);
     const reviewWeek = stringValue(input.reviewWeek);
     const reviewDate = stringValue(input.reviewDate);
     const slot = input.slot;
-    if (!configurationId || !reviewWeek || !reviewDate || !Number.isInteger(slot) || ![1, 2].includes(slot as number)) {
-      throw new ApiError('INVALID_REQUEST', 'configurationId, reviewWeek, reviewDate, and slot 1 or 2 are required.', {}, 422);
+    if (!area || !configurationId || !reviewWeek || !reviewDate || !Number.isInteger(slot) || ![1, 2].includes(slot as number)) {
+      throw new ApiError('INVALID_REQUEST', 'area, configurationId, reviewWeek, reviewDate, and slot 1 or 2 are required.', {}, 422);
     }
     getConfigurationOrThrow(configurationId);
-    const identity = createReviewIdentity({ reviewId: randomUUID(), configurationId, reviewWeek, reviewDate, observerId: user.id, slot: slot as ReviewSlot });
+    const identity = createReviewIdentity({ reviewId: randomUUID(), area, configurationId, reviewWeek, reviewDate, observerId: user.id, slot: slot as ReviewSlot });
     return { body: { data: await store.createDraft(identity) }, status: 201 };
   }
   const reviewMatch = path.match(/^\/reviews\/([^/]+)$/);
@@ -138,7 +147,7 @@ async function route(request: Request, url: URL, user: AuthUser, store: ReviewSt
     const entries = entriesValue(input.entries);
     if (version === undefined || !entries) throw new ApiError('INVALID_REQUEST', 'version and entries are required.', {}, 422);
     if (review.currentVersion !== version) throw new ApiError('STALE_VERSION', 'Reload the review before saving.', { currentVersion: review.currentVersion }, 409);
-    validateObservationEntries(getConfigurationOrThrow(review.configurationId), entries);
+    validateObservationEntries(getConfigurationOrThrow(review.configurationId), review.area, entries);
     return { body: { data: await store.saveDraft(review.reviewId, user.id, version, entries) }, status: 200 };
   }
   const submitMatch = path.match(/^\/reviews\/([^/]+)\/submit$/);
@@ -149,8 +158,8 @@ async function route(request: Request, url: URL, user: AuthUser, store: ReviewSt
     if (version === undefined) throw new ApiError('INVALID_REQUEST', 'version is required.', {}, 422);
     if (version !== review.currentVersion) throw new ApiError('STALE_VERSION', 'Reload the review before submitting.', { currentVersion: review.currentVersion }, 409);
     const configuration = getConfigurationOrThrow(review.configurationId);
-    assertCompleteMatrix(configuration, review.version.entries);
-    const metrics = calculateMetrics({ configuration, reviewId: review.reviewId, version, entries: review.version.entries });
+    assertCompleteMatrix(configuration, review.area, review.version.entries);
+    const metrics = calculateMetrics({ configuration, area: review.area, reviewId: review.reviewId, version, entries: review.version.entries });
     const saved = await store.submitReview(review.reviewId, user.id, version, metrics);
     return { body: { data: { reviewId: saved.reviewId, status: saved.status, version: saved.currentVersion, submittedAt: saved.version.submittedAt, metrics: presentMetrics(saved.version.metrics), confirmation: `Revisión ${saved.reviewDate} enviada correctamente.` }, review: saved }, status: 200 };
   }
@@ -164,9 +173,9 @@ async function route(request: Request, url: URL, user: AuthUser, store: ReviewSt
     if (baseVersion === undefined || !reason?.trim() || !entries) throw new ApiError('INVALID_REQUEST', 'baseVersion, reason, and entries are required.', {}, 422);
     if (baseVersion !== review.currentVersion) throw new ApiError('STALE_VERSION', 'Reload before creating a correction.', { currentVersion: review.currentVersion }, 409);
     const configuration = getConfigurationOrThrow(review.configurationId);
-    validateObservationEntries(configuration, entries);
-    assertCompleteMatrix(configuration, entries);
-    const metrics = calculateMetrics({ configuration, reviewId: review.reviewId, version: baseVersion + 1, entries });
+    validateObservationEntries(configuration, review.area, entries);
+    assertCompleteMatrix(configuration, review.area, entries);
+    const metrics = calculateMetrics({ configuration, area: review.area, reviewId: review.reviewId, version: baseVersion + 1, entries });
     const saved = await store.createCorrection(review.reviewId, user.id, baseVersion, reason, entries, metrics);
     return { body: { data: saved, confirmation: `Corrección v${saved.currentVersion} guardada correctamente.` }, status: 201 };
   }
@@ -181,13 +190,14 @@ async function route(request: Request, url: URL, user: AuthUser, store: ReviewSt
 
 function filtersOf(url: URL): Filters {
   const value = (key: keyof Filters) => url.searchParams.get(key) || undefined;
-  return { configurationId: value('configurationId'), crop: value('crop'), bed: value('bed'), organismId: value('organismId'), reviewId: value('reviewId'), from: value('from'), to: value('to') };
+  return { area: reportAreaValue(value('area')), configurationId: value('configurationId'), crop: value('crop'), bed: value('bed'), organismId: value('organismId'), reviewId: value('reviewId'), from: value('from'), to: value('to') };
 }
 
 function filterReviews(reviews: readonly ReviewRead[], filters: Filters): ReviewRead[] {
   return reviews.filter((review) => {
     const configuration = findConfiguration(review.configurationId);
-    return configuration && (!filters.configurationId || review.configurationId === filters.configurationId)
+    return configuration && (!filters.area || filters.area === 'combined' || review.area === filters.area)
+      && (!filters.configurationId || review.configurationId === filters.configurationId)
       && (!filters.crop || configuration.cropName.toLowerCase() === filters.crop.toLowerCase())
       && (!filters.reviewId || review.reviewId === filters.reviewId)
       && (!filters.from || review.reviewDate >= filters.from)
@@ -208,10 +218,10 @@ function reviewMetrics(review: ReviewRead, filters: Filters): readonly OrganismM
   const plantIds = scopedPlantIds(review.configurationId, filters.bed);
   if (plantIds.length === 0) return [];
   const grain: MetricGrain = filters.bed ? 'bed' : 'review';
-  return calculateMetrics({ configuration, reviewId: review.reviewId, version: review.currentVersion, entries: review.version.entries, plantIds, grain, calculatedAt: review.version.metrics[0]?.calculatedAt }).filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
+  return calculateMetrics({ configuration, area: review.area, reviewId: review.reviewId, version: review.currentVersion, entries: review.version.entries, plantIds, grain, calculatedAt: review.version.metrics[0]?.calculatedAt }).filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
 }
 
-type ObservationRow = { reviewId: string; version: number; reviewDate: string; reviewWeek: string; configurationId: string; lotName: string; cropName: string; bed: number; plantId: string; organismId: string; organismName: string; severity: number; metric: ReturnType<typeof presentMetric> };
+type ObservationRow = { reviewId: string; version: number; area: StoredReviewArea; reviewDate: string; reviewWeek: string; slot: ReviewSlot; configurationId: string; lotName: string; cropName: string; bed: number; plantId: string; organismId: string; organismName: string; severity: number; metric: ReturnType<typeof presentMetric> };
 
 function observationRows(reviews: readonly ReviewRead[], filters: Filters): ObservationRow[] {
   const result: ObservationRow[] = [];
@@ -222,20 +232,79 @@ function observationRows(reviews: readonly ReviewRead[], filters: Filters): Obse
     for (const entry of review.version.entries) {
       const bed = configuration.beds.find((item) => item.plantIds.includes(entry.plantId));
       if (plantIds.has(entry.plantId) && (!filters.organismId || filters.organismId === entry.organismId) && bed && metrics.has(entry.organismId)) {
-        result.push({ reviewId: review.reviewId, version: review.currentVersion, reviewDate: review.reviewDate, reviewWeek: review.reviewWeek, configurationId: configuration.id, lotName: configuration.lotName, cropName: configuration.cropName, bed: bed.number, plantId: entry.plantId, organismId: entry.organismId, organismName: CATALOG.organisms.find((item) => item.id === entry.organismId)?.name ?? entry.organismId, severity: entry.severity, metric: metrics.get(entry.organismId)! });
+        result.push({ reviewId: review.reviewId, version: review.currentVersion, area: review.area, reviewDate: review.reviewDate, reviewWeek: review.reviewWeek, slot: review.slot, configurationId: configuration.id, lotName: configuration.lotName, cropName: configuration.cropName, bed: bed.number, plantId: entry.plantId, organismId: entry.organismId, organismName: CATALOG.organisms.find((item) => item.id === entry.organismId)?.name ?? entry.organismId, severity: entry.severity, metric: metrics.get(entry.organismId)! });
       }
     }
   }
   return result.sort((left, right) => `${right.reviewDate}-${right.plantId}-${right.organismId}`.localeCompare(`${left.reviewDate}-${left.plantId}-${left.organismId}`));
 }
 
+function consolidatedRows(reviews: readonly ReviewRead[], filters: Filters) {
+  const result: Array<{
+    reviewId: string;
+    version: number;
+    area: StoredReviewArea;
+    reviewDate: string;
+    reviewWeek: string;
+    slot: ReviewSlot;
+    configurationId: string;
+    lotName: string;
+    cropName: string;
+    bed: number;
+    inspectedPlants: number;
+    organismId: string;
+    organismName: string;
+    metric: ReturnType<typeof presentMetric>;
+  }> = [];
+
+  for (const review of filterReviews(reviews, filters)) {
+    const configuration = getConfigurationOrThrow(review.configurationId);
+    const beds = filters.bed
+      ? configuration.beds.filter((item) => item.id === filters.bed || String(item.number) === filters.bed)
+      : configuration.beds;
+    for (const bed of beds) {
+      const metrics = calculateMetrics({
+        configuration,
+        area: review.area,
+        reviewId: review.reviewId,
+        version: review.currentVersion,
+        entries: review.version.entries,
+        plantIds: bed.plantIds,
+        grain: 'bed',
+        calculatedAt: review.version.metrics[0]?.calculatedAt,
+      }).filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
+      for (const metric of metrics) {
+        result.push({
+          reviewId: review.reviewId,
+          version: review.currentVersion,
+          area: review.area,
+          reviewDate: review.reviewDate,
+          reviewWeek: review.reviewWeek,
+          slot: review.slot,
+          configurationId: configuration.id,
+          lotName: configuration.lotName,
+          cropName: configuration.cropName,
+          bed: bed.number,
+          inspectedPlants: bed.plantIds.length,
+          organismId: metric.organismId,
+          organismName: CATALOG.organisms.find((item) => item.id === metric.organismId)?.name ?? metric.organismId,
+          metric: presentMetric(metric),
+        });
+      }
+    }
+  }
+
+  return result.sort((left, right) => `${right.reviewDate}-${right.slot}-${right.configurationId}-${right.bed}-${right.organismId}`.localeCompare(`${left.reviewDate}-${left.slot}-${left.configurationId}-${left.bed}-${left.organismId}`));
+}
+
 function dashboard(reviews: readonly ReviewRead[], filters: Filters) {
   const selected = filterReviews(reviews, filters);
   const metrics = selected.flatMap((review) => reviewMetrics(review, filters));
-  const byOrganism = new Map<string, OrganismMetric[]>();
-  metrics.forEach((metric) => byOrganism.set(metric.organismId, [...(byOrganism.get(metric.organismId) ?? []), metric]));
-  const kpis = [...byOrganism.entries()].map(([organismId, values]) => ({ organismId, organismName: CATALOG.organisms.find((item) => item.id === organismId)?.name ?? organismId, reviews: values.length, incidenceNumerator: values.reduce((sum, item) => sum + item.incidenceNumerator, 0), incidenceDenominator: values.reduce((sum, item) => sum + item.incidenceDenominator, 0), severityNumerator: values.reduce((sum, item) => sum + item.severityNumerator, 0), severityDenominator: values.reduce((sum, item) => sum + item.severityDenominator, 0), incidencePercent: roundPercentage(values.reduce((sum, item) => sum + item.incidenceNumerator, 0) / values.reduce((sum, item) => sum + item.incidenceDenominator, 0) * 100), severityPercent: roundPercentage(values.reduce((sum, item) => sum + item.severityNumerator, 0) / values.reduce((sum, item) => sum + item.severityDenominator, 0) * 100), provenance: values.map((item) => ({ formulaVersion: item.formulaVersion, sourceReviewId: item.sourceReviewId, sourceVersion: item.sourceVersion, calculatedAt: item.calculatedAt })) }));
-  return { count: metrics.length ? selected.length : 0, empty: metrics.length === 0, kpis, trends: selected.map((review) => ({ reviewId: review.reviewId, date: review.reviewDate, configurationId: review.configurationId, metrics: reviewMetrics(review, filters).map(presentMetric) })), comparisons: kpis.map(({ organismId, organismName, incidencePercent, severityPercent }) => ({ organismId, organismName, incidencePercent, severityPercent })), filters };
+  const byAreaAndOrganism = new Map<string, OrganismMetric[]>();
+  metrics.forEach((metric) => { const key = `${metric.area}::${metric.organismId}`; byAreaAndOrganism.set(key, [...(byAreaAndOrganism.get(key) ?? []), metric]); });
+  const kpis = [...byAreaAndOrganism.entries()].map(([key, values]) => { const [area, organismId] = key.split('::') as [StoredReviewArea, string]; return { area, organismId, organismName: CATALOG.organisms.find((item) => item.id === organismId)?.name ?? organismId, reviews: values.length, incidenceNumerator: values.reduce((sum, item) => sum + item.incidenceNumerator, 0), incidenceDenominator: values.reduce((sum, item) => sum + item.incidenceDenominator, 0), severityNumerator: values.reduce((sum, item) => sum + item.severityNumerator, 0), severityDenominator: values.reduce((sum, item) => sum + item.severityDenominator, 0), incidencePercent: roundPercentage(values.reduce((sum, item) => sum + item.incidenceNumerator, 0) / values.reduce((sum, item) => sum + item.incidenceDenominator, 0) * 100), severityPercent: roundPercentage(values.reduce((sum, item) => sum + item.severityNumerator, 0) / values.reduce((sum, item) => sum + item.severityDenominator, 0) * 100), provenance: values.map((item) => ({ formulaVersion: item.formulaVersion, sourceReviewId: item.sourceReviewId, sourceVersion: item.sourceVersion, calculatedAt: item.calculatedAt })) }; });
+  const consolidated = consolidatedRows(selected, filters);
+  return { count: metrics.length ? selected.length : 0, empty: metrics.length === 0, kpis, trends: selected.map((review) => { const configuration = getConfigurationOrThrow(review.configurationId); return { reviewId: review.reviewId, area: review.area, date: review.reviewDate, reviewWeek: review.reviewWeek, slot: review.slot, configurationId: review.configurationId, lotName: configuration.lotName, cropName: configuration.cropName, metrics: reviewMetrics(review, filters).map(presentMetric) }; }), consolidated, comparisons: kpis.map(({ area, organismId, organismName, incidencePercent, severityPercent }) => ({ area, organismId, organismName, incidencePercent, severityPercent })), filters };
 }
 
 function presentMetric(metric: OrganismMetric) {
@@ -256,8 +325,8 @@ function encodeCursor(offset: number): string { return Buffer.from(JSON.stringif
 function decodeCursor(cursor: string | null): number { if (!cursor) return 0; try { const value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); return Number.isInteger(value.offset) && value.offset >= 0 ? value.offset : 0; } catch { return 0; } }
 
 function csv(rows: readonly ObservationRow[]): string {
-  const columns = ['review_id', 'version', 'review_date', 'review_week', 'configuration_id', 'lot', 'crop', 'bed', 'plant_id', 'organism_id', 'organism', 'severity', 'incidence_percent', 'severity_percent', 'incidence_numerator', 'incidence_denominator', 'severity_numerator', 'severity_denominator', 'formula_version', 'calculated_at', 'source_review_id', 'source_version'];
-  const values = rows.map((row) => [row.reviewId, row.version, row.reviewDate, row.reviewWeek, row.configurationId, row.lotName, row.cropName, row.bed, row.plantId, row.organismId, row.organismName, row.severity, row.metric.incidencePercent, row.metric.severityPercent, row.metric.incidenceNumerator, row.metric.incidenceDenominator, row.metric.severityNumerator, row.metric.severityDenominator, row.metric.formulaVersion, row.metric.calculatedAt, row.metric.sourceReviewId, row.metric.sourceVersion]);
+  const columns = ['review_id', 'version', 'area', 'review_date', 'review_week', 'slot', 'configuration_id', 'lot', 'crop', 'bed', 'plant_id', 'organism_id', 'organism', 'severity', 'incidence_percent', 'severity_percent', 'incidence_numerator', 'incidence_denominator', 'severity_numerator', 'severity_denominator', 'formula_version', 'calculated_at', 'source_review_id', 'source_version'];
+  const values = rows.map((row) => [row.reviewId, row.version, row.area, row.reviewDate, row.reviewWeek, row.slot, row.configurationId, row.lotName, row.cropName, row.bed, row.plantId, row.organismId, row.organismName, row.severity, row.metric.incidencePercent, row.metric.severityPercent, row.metric.incidenceNumerator, row.metric.incidenceDenominator, row.metric.severityNumerator, row.metric.severityDenominator, row.metric.formulaVersion, row.metric.calculatedAt, row.metric.sourceReviewId, row.metric.sourceVersion]);
   return [columns, ...values].map((line) => line.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\r\n') + '\r\n';
 }
 
@@ -271,13 +340,15 @@ async function bodyOf(request: Request): Promise<Record<string, any>> {
 function stringValue(value: unknown): string | undefined { return typeof value === 'string' && value.length > 0 ? value : undefined; }
 function integerValue(value: unknown): number | undefined { return typeof value === 'number' && Number.isInteger(value) ? value : undefined; }
 function entriesValue(value: unknown): ObservationEntry[] | undefined { return Array.isArray(value) ? value as ObservationEntry[] : undefined; }
+function entryAreaValue(value: unknown): ReviewArea | undefined { return typeof value === 'string' && REVIEW_AREAS.includes(value as ReviewArea) ? value as ReviewArea : undefined; }
+function reportAreaValue(value: unknown): ReportArea | undefined { return value === 'combined' || entryAreaValue(value) ? value as ReportArea : undefined; }
 
 function handleError(error: unknown, headers: Headers): Response {
   if (error instanceof ApiError) return json({ code: error.code, message: error.message, details: error.details }, error.status, headers);
   if (error instanceof StoreError) {
     const map = { NOT_FOUND: ['NOT_FOUND', 404], FORBIDDEN: ['FORBIDDEN', 403], STALE_VERSION: ['STALE_VERSION', 409], IMMUTABLE: ['IMMUTABLE', 409], DUPLICATE_REVIEW_SLOT: ['DUPLICATE_REVIEW_SLOT', 409], DATABASE_NOT_READY: ['DATABASE_NOT_READY', 503] } as const;
     const [code, status] = map[error.code];
-    return json({ code, message: error.message, details: {} }, status, headers);
+    return json({ code, message: error.message, details: error.details }, status, headers);
   }
   if (error instanceof Error && error.name === 'DomainValidationError') {
     const domain = error as Error & { code: string; details: Record<string, unknown> };

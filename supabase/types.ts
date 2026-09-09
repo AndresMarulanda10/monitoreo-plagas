@@ -31,6 +31,7 @@ export type Database = {
       reviews: {
         Row: {
           id: string;
+          area: 'microbiology' | 'entomology' | 'legacy';
           configuration_id: string;
           review_week: string;
           review_date: string;

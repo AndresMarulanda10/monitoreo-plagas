@@ -530,6 +530,52 @@ textarea.native-select { resize: vertical; }
   padding-top: 1rem;
 }
 
+.advanced-reload {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  color: var(--muted-foreground);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.advanced-reload summary { cursor: pointer; }
+
+.draft-grid,
+.bed-progress-grid { display: grid; gap: 0.7rem; }
+
+.draft-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--muted) 22%, var(--card));
+  padding: 0.8rem;
+}
+
+.draft-card strong { display: block; font-size: 0.9rem; }
+
+.progress-summary {
+  margin-top: 1.25rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.progress-summary strong { display: block; color: var(--primary); font-size: 1.8rem; line-height: 1; }
+.progress-track { height: 0.55rem; margin-top: 0.7rem; overflow: hidden; border-radius: 999px; background: var(--muted); }
+.progress-track span { display: block; height: 100%; border-radius: inherit; background: var(--primary); transition: width 180ms ease; }
+
+.bed-progress-grid { grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); margin-top: 0.9rem; }
+.bed-progress { border: 1px solid var(--border); border-radius: 0.7rem; background: var(--input); color: var(--foreground); cursor: pointer; padding: 0.7rem; text-align: left; }
+.bed-progress:hover,
+.bed-progress-selected { border-color: var(--primary); box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 15%, transparent); }
+.bed-progress span,
+.bed-progress strong { display: block; }
+.bed-progress > span:first-child { font-size: 0.75rem; font-weight: 700; }
+.bed-progress strong { margin-top: 0.25rem; font-size: 0.9rem; }
+
 .compact-label { min-width: 10rem; }
 
 .alert {
@@ -564,6 +610,12 @@ textarea.native-select { resize: vertical; }
 .matrix-table tbody th { color: var(--foreground); font-weight: 600; }
 .matrix-table .severity-control { justify-content: flex-end; }
 
+.consolidated-table th,
+.consolidated-table td { vertical-align: top; }
+.consolidated-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--muted) 18%, transparent); }
+.table-subtitle { display: block; margin-top: 0.2rem; color: var(--muted-foreground); font-size: 0.68rem; font-weight: 500; white-space: normal; }
+.metric-value { color: var(--primary); font-size: 1rem; font-weight: 800; }
+
 .kpi-grid { display: grid; gap: 0.8rem; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); }
 .kpi-card { display: flex; min-height: 8.5rem; flex-direction: column; gap: 0.35rem; padding: 1rem; }
 .kpi-card strong { color: var(--primary); font-size: 2rem; line-height: 1; }
@@ -591,6 +643,7 @@ code { border-radius: 0.3rem; background: var(--muted); padding: 0.15rem 0.3rem;
   .save-panel { align-items: stretch; flex-direction: column; }
   .primary-button { width: 100%; }
   .reload-row { grid-template-columns: 1fr; }
+  .draft-card { align-items: stretch; flex-direction: column; }
   .nav-button { padding-inline: 0.5rem; }
 }
 

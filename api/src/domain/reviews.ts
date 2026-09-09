@@ -3,6 +3,8 @@ import {
   WEEKLY_REVIEW_SLOTS,
   type ObservationEntry,
   type ReviewIdentity,
+  type ReviewArea,
+  REVIEW_AREAS,
   type ReviewSlot,
   type ReviewStatus,
   type ReviewVersion,
@@ -18,6 +20,9 @@ export function createReviewIdentity(input: ReviewIdentity): ReviewIdentity {
   if (!input.reviewId || !input.configurationId || !input.observerId || !validDate(input.reviewDate)) {
     throw new DomainValidationError('INVALID_REVIEW_IDENTITY', 'Review identity fields are required and dates must be ISO dates.');
   }
+  if (!REVIEW_AREAS.includes(input.area as ReviewArea)) {
+    throw new DomainValidationError('INVALID_REVIEW_IDENTITY', 'Review area must be microbiology or entomology.', { area: input.area });
+  }
   if (!validDate(input.reviewWeek)) {
     throw new DomainValidationError('INVALID_REVIEW_IDENTITY', 'reviewWeek must be an ISO week-start date.');
   }
@@ -28,19 +33,23 @@ export function createReviewIdentity(input: ReviewIdentity): ReviewIdentity {
 }
 
 export function isSameWeeklySlot(left: ReviewIdentity, right: ReviewIdentity): boolean {
-  return left.configurationId === right.configurationId && left.reviewWeek === right.reviewWeek && left.slot === right.slot;
+  return left.area === right.area && left.configurationId === right.configurationId && left.reviewWeek === right.reviewWeek && left.slot === right.slot;
 }
 
 export function assertWeeklySlotAvailable(existingReviews: readonly ReviewWithIdentity[], candidate: ReviewIdentity): void {
   createReviewIdentity(candidate);
-  const duplicate = existingReviews.some(
-    (review) => (review.status === undefined || review.status === 'submitted') && isSameWeeklySlot(review, candidate),
-  );
+  const duplicate = existingReviews.find((review) => isSameWeeklySlot(review, candidate));
   if (duplicate) {
-    throw new DomainValidationError('DUPLICATE_REVIEW_SLOT', 'A submitted review already occupies this configuration weekly slot.', {
+    const message = duplicate.status === 'draft'
+      ? 'Ya existe un borrador para esta configuración, semana y ronda. Abre el borrador existente en lugar de crear otro.'
+      : 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana.';
+    throw new DomainValidationError('DUPLICATE_REVIEW_SLOT', message, {
       configurationId: candidate.configurationId,
+      area: candidate.area,
       reviewWeek: candidate.reviewWeek,
       slot: candidate.slot,
+      existingReviewId: duplicate.reviewId,
+      existingStatus: duplicate.status ?? 'submitted',
     });
   }
 }

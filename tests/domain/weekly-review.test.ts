@@ -4,6 +4,7 @@ import { assertWeeklySlotAvailable, createReviewIdentity, isSameWeeklySlot } fro
 
 const firstSlot: ReviewIdentity = {
   reviewId: 'review-1',
+  area: 'microbiology',
   configurationId: 'lot-g-strawberry',
   reviewWeek: '2026-08-31',
   reviewDate: '2026-09-01',
@@ -26,9 +27,16 @@ describe('weekly review identity domain', () => {
     ).toThrow(DomainValidationError);
   });
 
-  it('allows a draft to coexist until submission checks the slot', () => {
+  it('rejects a duplicate draft before it can coexist in the same slot', () => {
     expect(() =>
       assertWeeklySlotAvailable([{ ...firstSlot, status: 'draft' }], { ...firstSlot, reviewId: 'review-2' }),
-    ).not.toThrow();
+    ).toThrow('Abre el borrador existente');
+  });
+
+  it('allows the same weekly slot in another area but rejects it within the same area', () => {
+    const entomologySlot = { ...firstSlot, area: 'entomology' as const, reviewId: 'review-2' };
+    expect(isSameWeeklySlot(firstSlot, entomologySlot)).toBe(false);
+    expect(() => assertWeeklySlotAvailable([{ ...firstSlot, status: 'submitted' }], entomologySlot)).not.toThrow();
+    expect(() => assertWeeklySlotAvailable([{ ...firstSlot, status: 'submitted' }], { ...firstSlot, reviewId: 'review-3' })).toThrow('Ya existe');
   });
 });

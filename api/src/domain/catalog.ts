@@ -1,4 +1,4 @@
-import { DomainValidationError, type Bed, type MonitoringConfiguration, type Organism } from '../contracts';
+import { DomainValidationError, type Bed, type MonitoringConfiguration, type Organism, type StoredReviewArea } from '../contracts';
 
 const ORGANISM_DEFINITIONS = [
   ['cladosporium', 'Cladosporium'],
@@ -14,6 +14,12 @@ const ORGANISM_DEFINITIONS = [
 export const ORGANISMS: readonly Organism[] = Object.freeze(
   ORGANISM_DEFINITIONS.map(([id, name]) => Object.freeze({ id, name })),
 );
+
+const AREA_ORGANISM_IDS: Record<StoredReviewArea, readonly string[]> = Object.freeze({
+  microbiology: ['cladosporium', 'mildeo', 'botrytis'],
+  entomology: ['aphids', 'thrips', 'mites', 'tuta', 'plutella'],
+  legacy: ORGANISMS.map((organism) => organism.id),
+});
 
 const CONFIGURATION_DEFINITIONS = [
   ['hortisimulador-tomato', 'Hortisimulador', 'Tomato', 6, 4],
@@ -67,14 +73,20 @@ export function getOrganism(organismId: string): Organism | undefined {
   return ORGANISMS.find((organism) => organism.id === organismId);
 }
 
+export function getOrganismsForArea(area: StoredReviewArea): readonly Organism[] {
+  const allowed = new Set(AREA_ORGANISM_IDS[area]);
+  return ORGANISMS.filter((organism) => allowed.has(organism.id));
+}
+
 export function getRequiredPlantIds(configuration: MonitoringConfiguration): readonly string[] {
   return configuration.beds.flatMap((bed) => bed.plantIds);
 }
 
 export function getRequiredCoordinates(
   configuration: MonitoringConfiguration,
+  area: StoredReviewArea,
 ): readonly { plantId: string; organismId: string }[] {
   return getRequiredPlantIds(configuration).flatMap((plantId) =>
-    ORGANISMS.map((organism) => ({ plantId, organismId: organism.id })),
+    getOrganismsForArea(area).map((organism) => ({ plantId, organismId: organism.id })),
   );
 }

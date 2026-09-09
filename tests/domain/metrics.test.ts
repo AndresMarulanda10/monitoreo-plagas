@@ -3,9 +3,9 @@ import { CONFIGURATIONS, getConfigurationOrThrow, getRequiredCoordinates, ORGANI
 import { calculateMetric, calculateMetrics } from '../../api/src/domain/metrics';
 import type { ObservationEntry } from '../../api/src/contracts';
 
-function completeEntries(configurationId: string, scoreFor: (index: number) => 0 | 1 | 2 | 3): ObservationEntry[] {
+function completeEntries(configurationId: string, area: 'microbiology' | 'entomology', scoreFor: (index: number) => 0 | 1 | 2 | 3): ObservationEntry[] {
   const configuration = getConfigurationOrThrow(configurationId);
-  return getRequiredCoordinates(configuration).map(({ plantId, organismId }, index) => ({
+  return getRequiredCoordinates(configuration, area).map(({ plantId, organismId }, index) => ({
     plantId,
     organismId,
     severity: scoreFor(index),
@@ -35,7 +35,7 @@ describe('metrics domain', () => {
 
   it('calculates incidence from affected plants and severity over all inspected plants', () => {
     const configuration = getConfigurationOrThrow('lot-g-blueberry');
-    const entries = completeEntries(configuration.id, () => 0).map((entry) =>
+     const entries = completeEntries(configuration.id, 'microbiology', () => 0).map((entry) =>
       entry.organismId === 'cladosporium' && entry.plantId.endsWith('-plant-1')
         ? { ...entry, severity: 1 as const }
         : entry.organismId === 'cladosporium' && entry.plantId.endsWith('-plant-2')
@@ -44,7 +44,8 @@ describe('metrics domain', () => {
     );
     const metric = calculateMetric(
       {
-        configuration,
+         configuration,
+         area: 'microbiology',
         reviewId: 'review-1',
         version: 1,
         entries,
@@ -71,7 +72,8 @@ describe('metrics domain', () => {
         configuration,
         reviewId: 'review-2',
         version: 1,
-        entries: completeEntries(configuration.id, () => 0),
+         area: 'microbiology',
+         entries: completeEntries(configuration.id, 'microbiology', () => 0),
         plantIds: configuration.beds[0].plantIds,
         grain: 'bed',
       },
@@ -86,16 +88,17 @@ describe('metrics domain', () => {
     expect(metric.severityPercent).toBe(0);
   });
 
-  it('calculates all eight organism metrics from one complete matrix', () => {
+  it('calculates only the selected area organism metrics from one complete matrix', () => {
     const configuration = getConfigurationOrThrow('hortisimulador-tomato');
     const metrics = calculateMetrics({
       configuration,
       reviewId: 'review-3',
       version: 2,
-      entries: completeEntries(configuration.id, () => 0),
+       area: 'entomology',
+       entries: completeEntries(configuration.id, 'entomology', () => 0),
     });
 
-    expect(metrics).toHaveLength(8);
+    expect(metrics).toHaveLength(5);
     expect(metrics.every((metric) => metric.sourceVersion === 2 && metric.grain === 'review')).toBe(true);
   });
 });

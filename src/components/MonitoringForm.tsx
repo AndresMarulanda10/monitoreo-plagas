@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { api, apiBase, type Catalog, type Configuration, type Dashboard, type ObservationEntry, type Review, type Severity } from '../lib/api';
+import { api, apiBase, displayAreaName, displayCropName, displayOrganismName, organismsForArea, type Catalog, type Configuration, type Dashboard, type EntryArea, type ObservationEntry, type Review, type ReviewDraft, type Severity } from '../lib/api';
+import ConsolidatedDashboard from './ConsolidatedDashboard';
 import { Button } from './ui/Button';
 import { Card } from './ui/Card';
 
@@ -21,6 +22,24 @@ function weekStart(date: string) { const value = new Date(`${date}T00:00:00Z`); 
 function entryKey(plantId: string, organismId: string) { return `${plantId}::${organismId}`; }
 export function asEntries(values: Record<string, Severity | undefined>): ObservationEntry[] { return Object.entries(values).flatMap(([key, severity]) => { if (severity === undefined) return []; const [plantId, organismId] = key.split('::'); return [{ plantId, organismId, severity }]; }); }
 
+export type BedProgress = { bedNumber: number; expectedPlants: number; inspectedPlants: number; expectedCoordinates: number; actualCoordinates: number; complete: boolean };
+export type ReviewProgress = { expectedBeds: number; expectedPlants: number; inspectedPlants: number; expectedOrganisms: number; expectedCoordinates: number; actualCoordinates: number; complete: boolean; beds: BedProgress[] };
+export function calculateProgress(configuration: { beds: readonly { number: number; plantIds: readonly string[] }[] }, organisms: readonly { id: string }[], values: Record<string, Severity | undefined>): ReviewProgress {
+  const completePlant = (plantId: string) => organisms.every((organism) => values[entryKey(plantId, organism.id)] !== undefined);
+  const beds = configuration.beds.map((item) => {
+    const inspectedPlants = item.plantIds.filter(completePlant).length;
+    const actualCoordinates = item.plantIds.reduce((total, plantId) => total + organisms.filter((organism) => values[entryKey(plantId, organism.id)] !== undefined).length, 0);
+    const expectedCoordinates = item.plantIds.length * organisms.length;
+    return { bedNumber: item.number, expectedPlants: item.plantIds.length, inspectedPlants, expectedCoordinates, actualCoordinates, complete: actualCoordinates === expectedCoordinates };
+  });
+  const expectedPlants = beds.reduce((total, item) => total + item.expectedPlants, 0);
+  const inspectedPlants = beds.reduce((total, item) => total + item.inspectedPlants, 0);
+  const expectedCoordinates = beds.reduce((total, item) => total + item.expectedCoordinates, 0);
+  const actualCoordinates = beds.reduce((total, item) => total + item.actualCoordinates, 0);
+  return { expectedBeds: beds.length, expectedPlants, inspectedPlants, expectedOrganisms: organisms.length, expectedCoordinates, actualCoordinates, complete: actualCoordinates === expectedCoordinates, beds };
+}
+function progressPercent(actual: number, expected: number): number { return expected === 0 ? 0 : Math.round((actual / expected) * 100); }
+
 export default function MonitoringForm() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [review, setReview] = useState<Review | null>(null);
@@ -29,6 +48,7 @@ export default function MonitoringForm() {
   const [reviewDate, setReviewDate] = useState(today());
   const [slot, setSlot] = useState<1 | 2>(1);
   const [existingReviewId, setExistingReviewId] = useState('');
+  const [drafts, setDrafts] = useState<ReviewDraft[]>([]);
   const [bed, setBed] = useState('all');
   const [screen, setScreen] = useState<'entry' | 'dashboard'>('entry');
   const [correction, setCorrection] = useState(false);
@@ -42,30 +62,37 @@ export default function MonitoringForm() {
   const [notice, setNotice] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [workspace, setWorkspace] = useState<EntryArea | 'combined'>('microbiology');
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        await api.startSession();
-        const result = await api.catalog();
-        setCatalog(result.data);
-        setConfigurationId(result.data.configurations[0]?.id ?? '');
-      } catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible cargar el catálogo.'); }
-      finally { setLoading(false); }
-    })();
-  }, []);
+  async function loadWorkspace(credentials?: { email: string; password: string }) {
+    setLoading(true); setError(null);
+    try {
+      await api.startSession(credentials);
+      const result = await api.catalog();
+      setCatalog(result.data);
+      setConfigurationId(result.data.configurations[0]?.id ?? '');
+      try { setDrafts((await api.drafts(workspace === 'combined' ? 'microbiology' : workspace)).data); }
+      catch { setNotice('El catálogo está disponible, pero no se pudo cargar la lista de borradores.'); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible cargar el catálogo.'); }
+    finally { setLoading(false); }
+  }
+
+  useEffect(() => { void loadWorkspace(); }, []);
 
   async function login(event: FormEventLike) {
     event.preventDefault(); setLoading(true); setError(null);
-    try { await api.startSession({ email, password }); const result = await api.catalog(); setCatalog(result.data); setConfigurationId(result.data.configurations[0]?.id ?? ''); }
+    try { await loadWorkspace({ email, password }); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible iniciar sesión.'); }
     finally { setLoading(false); }
   }
 
   const configuration = catalog?.configurations.find((item) => item.id === configurationId);
+  const entryArea: EntryArea = workspace === 'entomology' ? 'entomology' : 'microbiology';
+  const entryOrganisms = catalog ? organismsForArea(catalog, entryArea) : [];
   const plants = useMemo(() => configuration?.beds.flatMap((item) => item.plantIds.map((plantId) => ({ plantId, bed: item.number }))) ?? [], [configuration]);
   const visiblePlants = bed === 'all' ? plants : plants.filter((item) => String(item.bed) === bed);
-  const complete = Boolean(configuration && plants.every(({ plantId }) => catalog?.organisms.every((organism) => values[entryKey(plantId, organism.id)] !== undefined)));
+  const progress = configuration && catalog ? calculateProgress(configuration, entryOrganisms, values) : null;
+  const complete = Boolean(progress?.complete);
   const selectedEntries = useMemo(() => asEntries(values), [values]);
 
   function hydrate(next: Review) {
@@ -73,11 +100,16 @@ export default function MonitoringForm() {
     next.version.entries.forEach((entry) => { initial[entryKey(entry.plantId, entry.organismId)] = entry.severity; });
     setValues(initial);
     setReview(next);
+    if (next.area !== 'legacy') setWorkspace(next.area);
+  }
+
+  async function refreshDrafts(area: EntryArea = entryArea) {
+    try { setDrafts((await api.drafts(area)).data); } catch { /* The open review remains usable if the list refresh fails. */ }
   }
 
   async function startDraft(event: FormEventLike) {
     event.preventDefault(); setError(null); setNotice(null); setSaving(true);
-    try { const result = await api.createDraft({ configurationId, reviewWeek: weekStart(reviewDate), reviewDate, slot }); hydrate(result.data); }
+    try { const result = await api.createDraft({ area: entryArea, configurationId, reviewWeek: weekStart(reviewDate), reviewDate, slot }); hydrate(result.data); setDrafts((current) => current.filter((item) => item.reviewId !== result.data.reviewId)); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible iniciar la revisión.'); }
     finally { setSaving(false); }
   }
@@ -85,21 +117,28 @@ export default function MonitoringForm() {
   async function reloadDraft() {
     if (!existingReviewId.trim()) return;
     setSaving(true); setError(null); setNotice(null);
-    try { const result = await api.review(existingReviewId.trim()); setConfigurationId(result.data.configurationId); hydrate(result.data); }
+    try { const result = await api.review(existingReviewId.trim()); setConfigurationId(result.data.configurationId); setReviewDate(result.data.reviewDate); setSlot(result.data.slot); setBed('all'); hydrate(result.data); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible recargar la revisión.'); }
+    finally { setSaving(false); }
+  }
+
+  async function openDraft(reviewId: string) {
+    setSaving(true); setError(null); setNotice(null);
+    try { const result = await api.review(reviewId); setConfigurationId(result.data.configurationId); setReviewDate(result.data.reviewDate); setSlot(result.data.slot); setBed('all'); hydrate(result.data); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible abrir el borrador.'); }
     finally { setSaving(false); }
   }
 
   async function saveDraft() {
     if (!review) return; setSaving(true); setError(null); setNotice(null);
-    try { const result = await api.save(review.reviewId, review.currentVersion, selectedEntries); hydrate(result.data); setNotice('Borrador guardado en el servidor.'); }
+    try { const result = await api.save(review.reviewId, review.currentVersion, selectedEntries); hydrate(result.data); await refreshDrafts(); setNotice('Borrador guardado en el servidor.'); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible guardar el borrador.'); }
     finally { setSaving(false); }
   }
 
   async function submit() {
     if (!review) return; setSaving(true); setError(null); setNotice(null);
-    try { const result = await api.submit(review.reviewId, review.currentVersion); hydrate(result.review); setNotice(result.data.confirmation); }
+    try { const result = await api.submit(review.reviewId, review.currentVersion); hydrate(result.review); await refreshDrafts(); setNotice(result.data.confirmation); }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'No fue posible enviar la revisión.'); }
     finally { setSaving(false); }
   }
@@ -111,8 +150,49 @@ export default function MonitoringForm() {
     finally { setSaving(false); }
   }
 
+  function cancelCorrection() {
+    if (review) hydrate(review);
+    setCorrection(false); setReason(''); setNotice('Corrección cancelada. Se conservaron los datos enviados.');
+  }
+
+  function startNewReview() {
+    setReview(null);
+    setValues({});
+    setBed('all');
+    setCorrection(false);
+    setReason('');
+    setNotice('Puedes seleccionar otro lote o cultivo para iniciar una nueva revisión.');
+    setError(null);
+  }
+
+  function switchWorkspace(next: EntryArea | 'combined') {
+    setWorkspace(next);
+    setReview(null);
+    setValues({});
+    setDrafts([]);
+    setBed('all');
+    setCorrection(false);
+    setReason('');
+    setError(null);
+    if (next === 'combined') {
+      void showDashboard('?area=combined');
+    } else {
+      setScreen('entry');
+      void refreshDrafts(next);
+    }
+  }
+
   function setSeverity(plantId: string, organismId: string, severity: Severity) { setValues((current) => ({ ...current, [entryKey(plantId, organismId)]: severity })); setNotice(null); }
-  function markAllClear() { const next: Record<string, Severity> = {}; plants.forEach(({ plantId }) => catalog?.organisms.forEach((organism) => { next[entryKey(plantId, organism.id)] = 0; })); setValues(next); }
+  function markAllClear() {
+    if (!catalog) return;
+    if (bed === 'all' && !window.confirm('Se marcarán en 0 todas las camas y todos los patógenos. ¿Continuar?')) return;
+    setValues((current) => {
+      const next = { ...current };
+      visiblePlants.forEach(({ plantId }) => entryOrganisms.forEach((organism) => { next[entryKey(plantId, organism.id)] = 0; }));
+      return next;
+    });
+    setNotice(bed === 'all' ? 'Todas las camas quedaron marcadas en 0.' : `La cama ${bed} quedó marcada en 0.`);
+  }
 
   async function showDashboard(query = '', filterQuery = query) {
     setScreen('dashboard'); setError(null); setDashboardQuery(filterQuery);
@@ -133,34 +213,41 @@ export default function MonitoringForm() {
     <header className="border-b border-border bg-topbar text-topbar-foreground">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
         <a className="flex items-center gap-3" href="/" aria-label="Ir al inicio"><span className="brand-mark"><LeafIcon /></span><span><span className="block font-display text-lg font-semibold">Métrica Verde</span><span className="block text-[0.68rem] uppercase tracking-[0.2em] text-topbar-muted">Campo / control</span></span></a>
-        <nav className="flex items-center gap-2" aria-label="Secciones"><button className={`nav-button ${screen === 'entry' ? 'nav-button-active' : ''}`} onClick={() => setScreen('entry')}>Registro</button><button className={`nav-button ${screen === 'dashboard' ? 'nav-button-active' : ''}`} onClick={() => void showDashboard()}>Tablero</button></nav>
+        <nav className="flex flex-wrap items-center justify-end gap-2" aria-label="Secciones"><button className={`nav-button ${workspace === 'microbiology' && screen === 'entry' ? 'nav-button-active' : ''}`} onClick={() => switchWorkspace('microbiology')}>Microbiología</button><button className={`nav-button ${workspace === 'entomology' && screen === 'entry' ? 'nav-button-active' : ''}`} onClick={() => switchWorkspace('entomology')}>Entomología</button><button className={`nav-button ${workspace === 'combined' && screen === 'dashboard' ? 'nav-button-active' : ''}`} onClick={() => switchWorkspace('combined')}>Consolidado</button></nav>
       </div>
     </header>
     <main className="mx-auto max-w-7xl px-4 pb-12 pt-8 sm:px-6 lg:px-8 lg:pt-12">
       {error && <div className="alert alert-error" role="alert">{error}</div>}
       {notice && <div className="alert alert-success" role="status">{notice}</div>}
-      {screen === 'dashboard' ? <DashboardView catalog={catalog} dashboard={dashboard} observations={observations} query={dashboardQuery} onRefresh={(query) => void showDashboard(query)} onNextPage={nextDashboardPage} /> : <>
-        <section className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="eyebrow">Registro de campo <span>•</span> API conectada</p><h1 className="mt-3 max-w-2xl font-display text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl">Monitoreo de <em>sanidad</em></h1><p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">Registra la severidad de cada planta. El servidor valida la matriz completa antes de crear una versión inmutable.</p></div><div className="date-card"><span className="date-label">Estado</span><strong>{review ? `v${review.currentVersion} · ${review.status === 'submitted' ? 'Enviada' : 'Borrador'}` : 'Nueva revisión'}</strong></div></section>
-        {!review ? <Card className="p-5 sm:p-6"><div className="mb-5"><h2 className="section-title">Iniciar revisión</h2><p className="section-caption">Selecciona una configuración y una de las dos rondas semanales.</p></div><form className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" onSubmit={startDraft}><label className="field-label">Configuración<select className="native-select" value={configurationId} onChange={(event) => setConfigurationId(event.target.value)}>{catalog.configurations.map((item) => <option value={item.id} key={item.id}>{item.lotName} / {item.cropName}</option>)}</select></label><label className="field-label">Fecha<input className="native-select" type="date" value={reviewDate} onChange={(event) => setReviewDate(event.target.value)} /></label><label className="field-label">Ronda semanal<select className="native-select" value={slot} onChange={(event) => setSlot(Number(event.target.value) as 1 | 2)}><option value="1">Ronda 1</option><option value="2">Ronda 2</option></select></label><div className="flex items-end"><Button type="submit" disabled={saving}>{saving ? 'Iniciando...' : 'Crear borrador'}</Button></div></form><div className="reload-row"><label className="field-label">Recargar por ID de revisión<input className="native-select" value={existingReviewId} onChange={(event) => setExistingReviewId(event.target.value)} placeholder="UUID de la revisión" /></label><Button type="button" className="secondary-button" onClick={() => void reloadDraft()} disabled={saving || !existingReviewId.trim()}>Recargar</Button></div></Card> : <ReviewView catalog={catalog} configuration={configuration!} review={review} values={values} visiblePlants={visiblePlants} bed={bed} setBed={setBed} correction={correction} reason={reason} setReason={setReason} complete={complete} saving={saving} onSetSeverity={setSeverity} onMarkAllClear={markAllClear} onSave={() => void saveDraft()} onSubmit={() => void submit()} onCorrection={() => setCorrection(true)} onSubmitCorrection={() => void submitCorrection()} />}
-      </>}
+       {screen === 'dashboard' ? <ConsolidatedDashboard catalog={catalog} dashboard={dashboard} observations={observations} query={dashboardQuery} onRefresh={(query) => void showDashboard(query || '?area=combined')} onNextPage={nextDashboardPage} /> : <>
+         <section className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end"><div><p className="eyebrow">{displayAreaName(entryArea)} <span>•</span> Registro de campo <span>•</span> API conectada</p><h1 className="mt-3 max-w-2xl font-display text-4xl font-semibold leading-[1.05] tracking-tight sm:text-5xl">Monitoreo de <em>sanidad</em></h1><p className="mt-4 max-w-xl text-base leading-7 text-muted-foreground">Registra la severidad de cada planta. El servidor valida la matriz completa antes de crear una versión inmutable.</p></div><div className="date-card"><span className="date-label">Estado</span><strong>{review ? `v${review.currentVersion} · ${review.status === 'submitted' ? 'Enviada' : 'Borrador'}` : 'Nueva revisión'}</strong></div></section>
+         {!review ? <Card className="p-5 sm:p-6">
+          <div className="mb-5"><h2 className="section-title">Iniciar revisión</h2><p className="section-caption">Selecciona lote, cultivo, fecha y una de las dos rondas semanales.</p></div>
+           {drafts.length > 0 ? <div className="draft-list mb-6" aria-labelledby="drafts-heading"><div className="mb-3"><h3 id="drafts-heading" className="section-title">Borradores de {displayAreaName(entryArea)}</h3><p className="section-caption">Ya existe una revisión para cada configuración, semana y ronda. Reabre el borrador correspondiente.</p></div><div className="draft-grid">{drafts.map((draft) => { const item = catalog.configurations.find((configurationItem) => configurationItem.id === draft.configurationId); return <article className="draft-card" key={draft.reviewId}><div><strong>Lote: {item?.lotName ?? draft.configurationId}</strong><span className="table-subtitle">Cultivo: {displayCropName(item?.cropName ?? 'Desconocido')}</span><span className="table-subtitle">Fecha: {draft.reviewDate} · Semana: {draft.reviewWeek}</span><span className="table-subtitle">Ronda {draft.slot} · {draft.completion.actual}/{draft.completion.expected} registros</span></div><Button type="button" className="secondary-button" onClick={() => void openDraft(draft.reviewId)} disabled={saving}>Abrir borrador</Button></article>; })}</div></div> : <p className="mb-5 text-sm text-muted-foreground">No tienes borradores pendientes en {displayAreaName(entryArea)}. Crea el primero con los datos de campo.</p>}
+           <form className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" onSubmit={startDraft}><label className="field-label">Lote y cultivo<select className="native-select" value={configurationId} onChange={(event) => setConfigurationId(event.target.value)}>{catalog.configurations.map((item) => <option value={item.id} key={item.id}>Lote: {item.lotName} · Cultivo: {displayCropName(item.cropName)}</option>)}</select></label><label className="field-label">Fecha de revisión<input className="native-select" type="date" value={reviewDate} onChange={(event) => setReviewDate(event.target.value)} /></label><label className="field-label">Ronda semanal<select className="native-select" value={slot} onChange={(event) => setSlot(Number(event.target.value) as 1 | 2)}><option value="1">Ronda 1</option><option value="2">Ronda 2</option></select></label><div className="flex items-end"><Button type="submit" disabled={saving}>{saving ? 'Iniciando...' : `Crear borrador de ${displayAreaName(entryArea)}`}</Button></div></form>
+          <details className="advanced-reload"><summary>Recuperación avanzada por ID</summary><div className="reload-row"><label className="field-label">ID de revisión<input className="native-select" value={existingReviewId} onChange={(event) => setExistingReviewId(event.target.value)} placeholder="UUID de la revisión" /></label><Button type="button" className="secondary-button" onClick={() => void reloadDraft()} disabled={saving || !existingReviewId.trim()}>Abrir por ID</Button></div></details>
+          </Card> : <ReviewView organisms={review.area === 'legacy' ? catalog.organisms : entryOrganisms} configuration={configuration!} review={review} progress={progress!} values={values} visiblePlants={visiblePlants} bed={bed} setBed={setBed} correction={correction} reason={reason} setReason={setReason} complete={complete} saving={saving} onSetSeverity={setSeverity} onMarkAllClear={markAllClear} onSave={() => void saveDraft()} onSubmit={() => void submit()} onCorrection={() => setCorrection(true)} onNewReview={startNewReview} onCancelCorrection={cancelCorrection} onSubmitCorrection={() => void submitCorrection()} />}
+       </>}
     </main>
     <footer className="mx-auto flex max-w-7xl justify-between px-4 pb-8 text-xs text-muted-foreground sm:px-6 lg:px-8"><span>API server-side · Supabase no se expone al navegador</span><span>Escala: 0–3</span></footer>
   </div>;
 }
 
-function ReviewView(props: { catalog: Catalog; configuration: Configuration; review: Review; values: Record<string, Severity | undefined>; visiblePlants: Array<{ plantId: string; bed: number }>; bed: string; setBed: (value: string) => void; correction: boolean; reason: string; setReason: (value: string) => void; complete: boolean; saving: boolean; onSetSeverity: (plantId: string, organismId: string, severity: Severity) => void; onMarkAllClear: () => void; onSave: () => void; onSubmit: () => void; onCorrection: () => void; onSubmitCorrection: () => void }) {
-  const { catalog, configuration, review, values, visiblePlants, bed, setBed, correction, reason, setReason, complete, saving, onSetSeverity, onMarkAllClear, onSave, onSubmit, onCorrection, onSubmitCorrection } = props;
+function ReviewView(props: { organisms: Catalog['organisms']; configuration: Configuration; review: Review; progress: ReviewProgress; values: Record<string, Severity | undefined>; visiblePlants: Array<{ plantId: string; bed: number }>; bed: string; setBed: (value: string) => void; correction: boolean; reason: string; setReason: (value: string) => void; complete: boolean; saving: boolean; onSetSeverity: (plantId: string, organismId: string, severity: Severity) => void; onMarkAllClear: () => void; onSave: () => void; onSubmit: () => void; onCorrection: () => void; onNewReview: () => void; onCancelCorrection: () => void; onSubmitCorrection: () => void }) {
+  const { organisms, configuration, review, progress, values, visiblePlants, bed, setBed, correction, reason, setReason, complete, saving, onSetSeverity, onMarkAllClear, onSave, onSubmit, onCorrection, onNewReview, onCancelCorrection, onSubmitCorrection } = props;
   const editable = review.status === 'draft' || correction;
   return <>
-    <Card className="mb-8 p-5 sm:p-6"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="eyebrow">{configuration.lotName} / {configuration.cropName}</p><h2 className="mt-2 font-display text-2xl font-semibold">Revisión del {review.reviewDate}</h2><p className="section-caption mt-1">Ronda {review.slot} · semana del {review.reviewWeek} · {review.completion.actual}/{review.completion.expected} coordenadas</p></div><div className="flex flex-wrap gap-2"><label className="field-label compact-label">Cama<select className="native-select" value={bed} onChange={(event) => setBed(event.target.value)}><option value="all">Todas las camas</option>{configuration.beds.map((item) => <option value={item.number} key={item.id}>Cama {item.number}</option>)}</select></label><Button type="button" className="secondary-button" onClick={onMarkAllClear}>Marcar todo 0</Button></div></div></Card>
-    <section aria-labelledby="matrix-heading"><div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h2 id="matrix-heading" className="section-title">Matriz por organismo</h2><p className="section-caption">Cada planta debe tener un valor explícito para los ocho organismos.</p></div><div className="legend" aria-label="Leyenda de severidad">{SEVERITIES.map((item) => <span className="legend-item" key={item.value}><span className={`severity-dot severity-${item.value}`}>{item.value}</span>{item.label}</span>)}</div></div><div className="matrix-grid">{catalog.organisms.map((organism) => <fieldset className="organism-card" key={organism.id}><legend className="sr-only">{organism.name}</legend><div className="organism-heading"><div className="organism-icon"><LeafIcon /></div><div><h3>{organism.name}</h3><p>Escala 0–3 · score &gt; 0 = afectada</p></div></div><div className="accessible-table-wrap"><table className="matrix-table"><caption className="sr-only">Severidad de {organism.name} por planta</caption><thead><tr><th scope="col">Planta</th><th scope="col">Cama</th><th scope="col">Severidad</th></tr></thead><tbody>{visiblePlants.map(({ plantId, bed: bedNumber }) => <tr key={plantId}><th scope="row">Planta {plantId.split('-plant-').at(-1)?.padStart(2, '0')}</th><td>{bedNumber}</td><td><div className="severity-control" role="radiogroup" aria-label={`${organism.name}, planta ${plantId}`}>
+    <Card className="mb-8 p-5 sm:p-6"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="eyebrow">Lote: {configuration.lotName} <span>•</span> Cultivo: {displayCropName(configuration.cropName)}</p><h2 className="mt-2 font-display text-2xl font-semibold">Revisión del {review.reviewDate}</h2><p className="section-caption mt-1">Fecha: {review.reviewDate} · Ronda {review.slot} · semana del {review.reviewWeek}</p></div><div className="flex flex-wrap gap-2"><label className="field-label compact-label">Cama<select className="native-select" value={bed} onChange={(event) => setBed(event.target.value)}><option value="all">Todas las camas</option>{configuration.beds.map((item) => <option value={item.number} key={item.id}>Cama {item.number} · {progress.beds.find((status) => status.bedNumber === item.number)?.inspectedPlants ?? 0}/{item.plantIds.length}</option>)}</select></label><Button type="button" className="secondary-button" onClick={onMarkAllClear} disabled={!editable}>{bed === 'all' ? 'Marcar todo 0' : `Marcar cama ${bed} en 0`}</Button></div></div>
+      <div className="progress-summary" aria-label="Progreso de la revisión"><div className="flex items-end justify-between gap-3"><div><span className="summary-label">Progreso general</span><strong>{progressPercent(progress.actualCoordinates, progress.expectedCoordinates)}%</strong></div><span className="text-sm text-muted-foreground">{progress.inspectedPlants}/{progress.expectedPlants} plantas completas</span></div><div className="progress-track"><span style={{ width: `${progressPercent(progress.actualCoordinates, progress.expectedCoordinates)}%` }} /></div><p className="section-caption">{progress.expectedBeds} camas · {progress.expectedPlants} plantas esperadas · {progress.expectedOrganisms} patógenos · {progress.actualCoordinates}/{progress.expectedCoordinates} registros</p><div className="bed-progress-grid">{progress.beds.map((status) => <button type="button" className={`bed-progress ${bed === String(status.bedNumber) ? 'bed-progress-selected' : ''}`} key={status.bedNumber} onClick={() => setBed(String(status.bedNumber))}><span>Cama {status.bedNumber}</span><strong>{status.inspectedPlants}/{status.expectedPlants} plantas</strong><span className="table-subtitle">{status.actualCoordinates}/{status.expectedCoordinates} registros · {status.complete ? 'Completa' : 'Pendiente'}</span></button>)}</div></div>
+    </Card>
+     <section aria-labelledby="matrix-heading"><div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-end"><div><h2 id="matrix-heading" className="section-title">Matriz por patógeno</h2><p className="section-caption">Una tabla por patógeno. Cada planta debe tener un valor explícito de severidad entre 0 y 3.</p></div><div className="legend" aria-label="Leyenda de severidad">{SEVERITIES.map((item) => <span className="legend-item" key={item.value}><span className={`severity-dot severity-${item.value}`}>{item.value}</span>{item.label}</span>)}</div></div><div className="matrix-grid">{organisms.map((organism) => <fieldset className="organism-card" data-accent={organism.id} key={organism.id}><legend className="sr-only">{displayOrganismName(organism.name)}</legend><div className="organism-heading"><div className="organism-icon"><LeafIcon /></div><div><h3>{displayOrganismName(organism.name)}</h3><p>Escala 0–3 · score &gt; 0 = afectada</p></div></div><div className="accessible-table-wrap"><table className="matrix-table"><caption className="sr-only">Severidad de {displayOrganismName(organism.name)} por planta</caption><thead><tr><th scope="col">Planta</th><th scope="col">Cama</th><th scope="col">Severidad</th></tr></thead><tbody>{visiblePlants.map(({ plantId, bed: bedNumber }) => <tr key={plantId}><th scope="row">Planta {plantId.split('-plant-').at(-1)?.padStart(2, '0')}</th><td>{bedNumber}</td><td><div className="severity-control" role="radiogroup" aria-label={`${displayOrganismName(organism.name)}, planta ${plantId}`}>
       {SEVERITIES.map((item) => <label className={`severity-option severity-option-${item.value}`} key={`${plantId}-${organism.id}-${item.value}`}><input type="radio" name={entryKey(plantId, organism.id)} value={item.value} checked={values[entryKey(plantId, organism.id)] === item.value} disabled={!editable} onChange={() => onSetSeverity(plantId, organism.id, item.value)} /><span>{item.value}</span><span className="sr-only">{item.label}</span></label>)}
     </div></td></tr>)}</tbody></table></div></fieldset>)}</div></section>
-    <Card className="save-panel mt-8"><div><h2 className="section-title">{correction ? 'Enviar corrección' : review.status === 'submitted' ? 'Versión enviada' : 'Guardar y enviar'}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{review.status === 'submitted' && !correction ? `La versión ${review.currentVersion} es inmutable. Puedes crear una corrección vinculada.` : complete ? 'Matriz completa. Puedes guardar el borrador o enviarlo para congelar esta versión.' : `Faltan ${review.completion.expected - review.completion.actual} coordenadas. La entrega está bloqueada.`}</p>{correction && <label className="field-label mt-3">Motivo de corrección<textarea className="native-select" rows={2} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explica el ajuste realizado" /></label>}</div><div className="flex flex-wrap gap-2">{review.status === 'draft' && <Button type="button" className="secondary-button" onClick={onSave} disabled={saving}>Guardar borrador</Button>}{review.status === 'draft' && <Button type="button" onClick={onSubmit} disabled={saving || !complete}>{saving ? 'Enviando...' : 'Enviar revisión'}</Button>}{review.status === 'submitted' && !correction && <Button type="button" onClick={onCorrection}>Crear corrección</Button>}{correction && <><Button type="button" className="secondary-button" onClick={() => setReason('')}>Limpiar motivo</Button><Button type="button" onClick={onSubmitCorrection} disabled={saving || !complete || !reason.trim()}>{saving ? 'Guardando...' : 'Enviar corrección'}</Button></>}</div></Card>
+     <Card className="save-panel mt-8"><div><h2 className="section-title">{correction ? 'Enviar corrección' : review.status === 'submitted' ? 'Versión enviada' : 'Guardar y enviar'}</h2><p className="mt-2 text-sm leading-6 text-muted-foreground">{review.status === 'submitted' && !correction ? `La versión ${review.currentVersion} es inmutable. Puedes crear una corrección vinculada o iniciar otra revisión.` : complete ? 'Matriz completa. Puedes guardar el borrador o enviarlo para congelar esta versión.' : `Faltan ${progress.expectedCoordinates - progress.actualCoordinates} registros. La entrega está bloqueada.`}</p>{correction && <label className="field-label mt-3">Motivo de corrección<textarea className="native-select" rows={2} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explica el ajuste realizado" /></label>}</div><div className="flex flex-wrap gap-2">{review.status === 'draft' && <Button type="button" className="secondary-button" onClick={onSave} disabled={saving}>Guardar borrador</Button>}{review.status === 'draft' && <Button type="button" onClick={onSubmit} disabled={saving || !complete}>{saving ? 'Enviando...' : 'Enviar revisión'}</Button>}{review.status === 'submitted' && !correction && <><Button type="button" className="secondary-button" onClick={onNewReview}>Nueva revisión</Button><Button type="button" onClick={onCorrection}>Crear corrección</Button></>}{correction && <><Button type="button" className="secondary-button" onClick={onCancelCorrection}>Cancelar corrección</Button><Button type="button" className="secondary-button" onClick={() => setReason('')}>Limpiar motivo</Button><Button type="button" onClick={onSubmitCorrection} disabled={saving || !complete || !reason.trim()}>{saving ? 'Guardando...' : 'Enviar corrección'}</Button></>}</div></Card>
   </>;
 }
 
-function DashboardView({ catalog, dashboard, observations, query, onRefresh, onNextPage }: { catalog: Catalog; dashboard: Dashboard | null; observations: Awaited<ReturnType<typeof api.observations>> | null; query: string; onRefresh: (query: string) => void; onNextPage: () => void }) {
+export function DashboardView({ catalog, dashboard, observations, query, onRefresh, onNextPage }: { catalog: Catalog; dashboard: Dashboard | null; observations: Awaited<ReturnType<typeof api.observations>> | null; query: string; onRefresh: (query: string) => void; onNextPage: () => void }) {
   const [configurationId, setConfigurationId] = useState('');
   const [organismId, setOrganismId] = useState('');
   const [bed, setBed] = useState('');

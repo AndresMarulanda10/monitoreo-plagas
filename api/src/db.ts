@@ -8,6 +8,8 @@ import type {
   ReviewIdentity,
   ReviewVersion,
   OrganismMetric,
+  ReviewArea,
+  StoredReviewArea,
 } from './contracts';
 
 export type StoredVersion = ReviewVersion & { metrics: readonly OrganismMetric[] };
@@ -19,8 +21,10 @@ export type ReviewRead = ReviewIdentity & {
   versions: readonly StoredVersion[];
 };
 
+export type ReviewDraftSummary = Omit<Pick<ReviewRead, 'reviewId' | 'area' | 'configurationId' | 'reviewWeek' | 'reviewDate' | 'slot' | 'status' | 'currentVersion' | 'completion'>, 'status'> & { status: 'draft' };
+
 export class StoreError extends Error {
-  constructor(readonly code: 'NOT_FOUND' | 'FORBIDDEN' | 'STALE_VERSION' | 'IMMUTABLE' | 'DUPLICATE_REVIEW_SLOT' | 'DATABASE_NOT_READY', message: string) {
+  constructor(readonly code: 'NOT_FOUND' | 'FORBIDDEN' | 'STALE_VERSION' | 'IMMUTABLE' | 'DUPLICATE_REVIEW_SLOT' | 'DATABASE_NOT_READY', message: string, readonly details: Record<string, unknown> = {}) {
     super(message);
     this.name = 'StoreError';
   }
@@ -41,6 +45,7 @@ export interface ReviewStore {
     entries: readonly ObservationEntry[],
     metrics: readonly OrganismMetric[],
   ): Promise<ReviewRead>;
+  listDrafts(userId: string, area?: ReviewArea): Promise<readonly ReviewDraftSummary[]>;
   listSubmitted(userId: string): Promise<readonly ReviewRead[]>;
 }
 
@@ -56,8 +61,22 @@ function reviewRead(identity: ReviewIdentity, versions: readonly StoredVersion[]
   const version = versions.find((item) => item.version === currentVersion);
   if (!version) throw new StoreError('NOT_FOUND', 'Review version not found.');
   const configuration = getConfigurationOrThrow(identity.configurationId);
-  const completion = assessCompleteness(configuration, version.entries);
+  const completion = assessCompleteness(configuration, identity.area, version.entries);
   return { ...clone(identity), status: version.status, currentVersion, version: clone(version), versions: clone(versions), completion };
+}
+
+function draftSummary(review: ReviewRead): ReviewDraftSummary {
+  return {
+    reviewId: review.reviewId,
+    area: review.area,
+    configurationId: review.configurationId,
+    reviewWeek: review.reviewWeek,
+    reviewDate: review.reviewDate,
+    slot: review.slot,
+    status: 'draft',
+    currentVersion: review.currentVersion,
+    completion: review.completion,
+  };
 }
 
 type MemoryRecord = { identity: ReviewIdentity; currentVersion: number; versions: StoredVersion[] };
@@ -143,6 +162,13 @@ export class MemoryStore implements ReviewStore {
       .filter((record) => record.identity.observerId === userId && record.versions.find((item) => item.version === record.currentVersion)?.status === 'submitted')
       .map((record) => reviewRead(record.identity, record.versions, record.currentVersion));
   }
+
+  async listDrafts(userId: string, area?: ReviewArea): Promise<readonly ReviewDraftSummary[]> {
+    return [...this.reviews.values()]
+      .filter((record) => record.identity.observerId === userId && record.identity.area !== 'legacy' && (!area || record.identity.area === area) && record.versions.find((item) => item.version === record.currentVersion)?.status === 'draft')
+      .map((record) => draftSummary(reviewRead(record.identity, record.versions, record.currentVersion)))
+      .sort((left, right) => right.reviewDate.localeCompare(left.reviewDate) || right.reviewWeek.localeCompare(left.reviewWeek) || right.slot - left.slot);
+  }
 }
 
 type SupabaseRow = Record<string, unknown>;
@@ -203,6 +229,7 @@ export class SupabaseStore implements ReviewStore {
   private async read(reviewId: string, userId: string): Promise<ReviewRead> {
     const review = await this.query<SupabaseRow>(this.client.from('reviews').select('*').eq('id', reviewId).eq('observer_id', userId).single());
     if (!review) throw new StoreError('NOT_FOUND', 'Review not found.');
+    const area = (review.area === 'legacy' ? 'legacy' : String(review.area)) as StoredReviewArea;
     const versions = await this.query<SupabaseRow[]>(this.client.from('review_versions').select('*').eq('review_id', reviewId).order('version'));
     const stored = await Promise.all((versions as SupabaseRow[]).map(async (version) => {
       const versionNumber = Number(version.version);
@@ -218,10 +245,11 @@ export class SupabaseStore implements ReviewStore {
         correctionOfVersion: version.correction_of_version ? Number(version.correction_of_version) : undefined,
         correctionReason: version.correction_reason ? String(version.correction_reason) : undefined,
         entries: (observations as SupabaseRow[]).map((entry) => ({ plantId: String(entry.plant_id), organismId: String(entry.organism_id), severity: Number(entry.severity) as 0 | 1 | 2 | 3 })),
-      }, (metrics as SupabaseRow[]).map(metricFromRow));
+      }, (metrics as SupabaseRow[]).map((metric) => metricFromRow(metric, area)));
     }));
     return reviewRead({
       reviewId,
+      area,
       configurationId: String(review.configuration_id),
       reviewWeek: String(review.review_week),
       reviewDate: String(review.review_date),
@@ -231,11 +259,29 @@ export class SupabaseStore implements ReviewStore {
   }
 
   async createDraft(identity: ReviewIdentity): Promise<ReviewRead> {
-    await this.query(this.client.from('reviews').insert({
-      id: identity.reviewId, configuration_id: identity.configurationId, review_week: identity.reviewWeek,
-      review_date: identity.reviewDate, observer_id: identity.observerId, review_slot: identity.slot,
-    }));
-    await this.query(this.client.from('review_versions').insert({ review_id: identity.reviewId, version: 1, status: 'draft' }));
+    const existing = await this.query<SupabaseRow[]>(this.client.from('reviews').select('id, status').eq('area', identity.area).eq('configuration_id', identity.configurationId).eq('review_week', identity.reviewWeek).eq('review_slot', identity.slot).limit(1));
+    if (existing.length > 0) {
+      const existingStatus = String(existing[0].status) === 'draft' ? 'draft' : 'submitted';
+      const message = existingStatus === 'draft'
+        ? 'Ya existe un borrador para esta configuración, semana y ronda. Abre el borrador existente en lugar de crear otro.'
+        : 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana.';
+      throw new StoreError('DUPLICATE_REVIEW_SLOT', message, {
+        existingReviewId: String(existing[0].id),
+        existingStatus,
+      });
+    }
+    try {
+      await this.query(this.client.from('reviews').insert({
+        id: identity.reviewId, area: identity.area, configuration_id: identity.configurationId, review_week: identity.reviewWeek,
+        review_date: identity.reviewDate, observer_id: identity.observerId, review_slot: identity.slot,
+      }));
+      await this.query(this.client.from('review_versions').insert({ review_id: identity.reviewId, version: 1, status: 'draft' }));
+    } catch (error) {
+      if (error instanceof StoreError && /reviews_one_(submitted_)?slot|reviews_one_area_slot|duplicate key/i.test(error.message)) {
+        throw new StoreError('DUPLICATE_REVIEW_SLOT', 'Ya existe una revisión para esta configuración, semana y ronda. Revisa la lista de borradores y abre el existente si aparece.');
+      }
+      throw error;
+    }
     return this.read(identity.reviewId, identity.observerId);
   }
 
@@ -254,7 +300,7 @@ export class SupabaseStore implements ReviewStore {
       p_review_id: reviewId, p_user_id: userId, p_version: version,
       p_metrics: metrics.map(metricToRow),
     } as never);
-    if (result.error) throw new StoreError(result.error.message.includes('stale') ? 'STALE_VERSION' : result.error.message.includes('reviews_one_submitted_slot') ? 'DUPLICATE_REVIEW_SLOT' : 'DATABASE_NOT_READY', result.error.message);
+    if (result.error) throw new StoreError(result.error.message.includes('stale') ? 'STALE_VERSION' : result.error.message.includes('reviews_one_submitted_slot') || result.error.message.includes('reviews_one_slot') || result.error.message.includes('reviews_one_area_slot') ? 'DUPLICATE_REVIEW_SLOT' : 'DATABASE_NOT_READY', result.error.message);
     return this.read(reviewId, userId);
   }
 
@@ -263,13 +309,21 @@ export class SupabaseStore implements ReviewStore {
       p_review_id: reviewId, p_user_id: userId, p_base_version: baseVersion, p_reason: reason,
       p_entries: entries, p_metrics: metrics.map(metricToRow),
     } as never);
-    if (result.error) throw new StoreError(result.error.message.includes('stale') ? 'STALE_VERSION' : result.error.message.includes('reviews_one_submitted_slot') ? 'DUPLICATE_REVIEW_SLOT' : 'DATABASE_NOT_READY', result.error.message);
+    if (result.error) throw new StoreError(result.error.message.includes('stale') ? 'STALE_VERSION' : result.error.message.includes('reviews_one_submitted_slot') || result.error.message.includes('reviews_one_slot') || result.error.message.includes('reviews_one_area_slot') ? 'DUPLICATE_REVIEW_SLOT' : 'DATABASE_NOT_READY', result.error.message);
     return this.read(reviewId, userId);
   }
 
   async listSubmitted(userId: string): Promise<readonly ReviewRead[]> {
     const rows = await this.query(this.client.from('reviews').select('id').eq('observer_id', userId).eq('status', 'submitted').order('review_date', { ascending: false }));
     return Promise.all((rows as SupabaseRow[]).map((row) => this.read(String(row.id), userId)));
+  }
+
+  async listDrafts(userId: string, area?: ReviewArea): Promise<readonly ReviewDraftSummary[]> {
+    let query = this.client.from('reviews').select('id').eq('observer_id', userId).neq('area', 'legacy').eq('status', 'draft').order('review_date', { ascending: false }).order('review_week', { ascending: false }).order('review_slot', { ascending: false });
+    if (area) query = query.eq('area', area);
+    const rows = await this.query<SupabaseRow[]>(query);
+    const reviews = await Promise.all((rows as SupabaseRow[]).map((row) => this.read(String(row.id), userId)));
+    return reviews.map(draftSummary);
   }
 }
 
@@ -283,13 +337,14 @@ function metricToRow(metric: OrganismMetric): Record<string, unknown> {
   };
 }
 
-function metricFromRow(row: SupabaseRow): OrganismMetric {
+function metricFromRow(row: SupabaseRow, area: StoredReviewArea): OrganismMetric {
   const provenance: MetricProvenance = {
     grain: row.grain as MetricProvenance['grain'], formulaVersion: row.formula_version as 'metrics.v1',
     sourceReviewId: String(row.review_id), sourceVersion: Number(row.version), calculatedAt: String(row.calculated_at),
   };
   return {
     ...provenance, organismId: String(row.organism_id), incidenceNumerator: Number(row.incidence_numerator),
+    area,
     incidenceDenominator: Number(row.incidence_denominator), severityNumerator: Number(row.severity_numerator),
     severityDenominator: Number(row.severity_denominator), incidencePercent: Number(row.incidence_percent),
     severityPercent: Number(row.severity_percent),
