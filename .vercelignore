@@ -1,0 +1,9 @@
+.atl/
+.codegraph/
+.env
+.env.*
+!.env.example
+docs/base/
+node_modules/
+dist/
+supabase/.temp/
