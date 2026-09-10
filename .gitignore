@@ -21,3 +21,4 @@ docs/base/
 .atl/
 .codegraph/
 supabase/.temp/
+.vercel
