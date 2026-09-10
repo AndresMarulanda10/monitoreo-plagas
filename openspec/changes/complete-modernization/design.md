@@ -41,7 +41,7 @@ Use secure HttpOnly cookies, allowlisted split-host CORS, `SameSite=None; Secure
 | Files | Action | Purpose |
 |---|---|---|
 | `src/components/MonitoringForm.tsx`, `src/pages/index.astro`, `src/components/ui/*`, `src/styles/global.css` | Modify | Catalog-driven entry, reload/errors, responsive matrix, dashboard/table. |
-| `api/src/{app,routes/v1,middleware,domain,db}.ts`, `supabase/migrations/*.sql`, `supabase/types.ts` | Create | API, schema, seeds, validation, metrics, generated types. |
+| `server/src/{app,routes/v1,middleware,domain,db}.ts`, `supabase/migrations/*.sql`, `supabase/types.ts` | Create | API, schema, seeds, validation, metrics, generated types. |
 | `api/Dockerfile`, `docker-compose.yml`, `nginx.conf`, `.env.example`, `.github/workflows/ci.yml`, `docs/operations.md`, `tests/**`, `vitest.config.ts` | Create/modify | Health, CI, secrets, tests, deployment and recovery runbook. |
 
 ## Testing Strategy

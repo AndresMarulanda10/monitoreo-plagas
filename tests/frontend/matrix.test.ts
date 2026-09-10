@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { asEntries, calculateProgress } from '../../src/components/MonitoringForm';
-import { getConfigurationOrThrow } from '../../api/src/domain/catalog';
+import { getConfigurationOrThrow } from '../../server/src/domain/catalog';
 
 describe('frontend matrix adapter', () => {
   it('keeps an explicit zero and excludes cells that are not yet reviewed', () => {

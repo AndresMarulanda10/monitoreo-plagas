@@ -7,8 +7,8 @@ import {
   type Severity,
   type MetricGrain,
   type StoredReviewArea,
-} from '../contracts';
-import { getOrganism, getOrganismsForArea, getRequiredCoordinates, getRequiredPlantIds } from './catalog';
+} from '../contracts.js';
+import { getOrganism, getOrganismsForArea, getRequiredCoordinates, getRequiredPlantIds } from './catalog.js';
 
 export type CompletenessResult = {
   complete: boolean;

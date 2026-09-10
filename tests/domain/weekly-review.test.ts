@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { DomainValidationError, WEEKLY_REVIEW_SLOTS, type ReviewIdentity } from '../../api/src/contracts';
-import { assertWeeklySlotAvailable, createReviewIdentity, isSameWeeklySlot } from '../../api/src/domain/reviews';
+import { DomainValidationError, WEEKLY_REVIEW_SLOTS, type ReviewIdentity } from '../../server/src/contracts';
+import { assertWeeklySlotAvailable, createReviewIdentity, isSameWeeklySlot } from '../../server/src/domain/reviews';
 
 const firstSlot: ReviewIdentity = {
   reviewId: 'review-1',

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { getConfigurationOrThrow, getRequiredCoordinates } from '../../api/src/domain/catalog';
-import { assessCompleteness, calculateMetrics, validateObservationEntries } from '../../api/src/domain/metrics';
-import { DomainValidationError, type ObservationEntry } from '../../api/src/contracts';
+import { getConfigurationOrThrow, getRequiredCoordinates } from '../../server/src/domain/catalog';
+import { assessCompleteness, calculateMetrics, validateObservationEntries } from '../../server/src/domain/metrics';
+import { DomainValidationError, type ObservationEntry } from '../../server/src/contracts';
 
 describe('matrix completeness domain', () => {
   const configuration = getConfigurationOrThrow('lot-g-blueberry');

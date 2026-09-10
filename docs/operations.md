@@ -18,6 +18,8 @@ El camino operativo recomendado es un VPS con Compose, Nginx y Supabase gestiona
 4. Deja `PUBLIC_API_BASE_URL` vacío o sin definir para usar el API same-origin. Si existe un dominio de API separado, configura su URL pública explícita.
 5. `SUPABASE_SECRET_KEY` y la alternativa legacy `SUPABASE_SERVICE_ROLE_KEY` son secretos server-only. No los expongas mediante `PUBLIC_*`, el frontend, logs o el repositorio.
 
+El árbol `server/src/` contiene la implementación compartida por Docker y Vercel. `api/[...path].ts` es la única función TypeScript dentro de `api/`; no agregues funciones auxiliares allí ni rewrites en `vercel.json`, porque el adaptador debe conservar la ruta original `/api/v1/*`.
+
 ## Variables
 
 | Variable | Propósito | Exposición |

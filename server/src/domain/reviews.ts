@@ -8,7 +8,7 @@ import {
   type ReviewSlot,
   type ReviewStatus,
   type ReviewVersion,
-} from '../contracts';
+} from '../contracts.js';
 
 export type ReviewWithIdentity = ReviewIdentity & { status?: ReviewStatus };
 

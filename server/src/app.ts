@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { createSupabaseAuthResolver, cookieHeader, readCookie, signInSupabase, type AuthResolver, type AuthUser } from './auth';
-import { createStore, StoreError, type ReviewRead, type ReviewStore } from './db';
-import { CATALOG, findConfiguration, getConfigurationOrThrow, getRequiredPlantIds } from './domain/catalog';
-import { assertCompleteMatrix, calculateMetrics, validateObservationEntries, roundPercentage } from './domain/metrics';
-import { createReviewIdentity } from './domain/reviews';
-import { REVIEW_AREAS, type MetricGrain, type ObservationEntry, type OrganismMetric, type ReviewArea, type ReviewSlot, type StoredReviewArea } from './contracts';
+import { createSupabaseAuthResolver, cookieHeader, readCookie, signInSupabase, type AuthResolver, type AuthUser } from './auth.js';
+import { createStore, StoreError, type ReviewRead, type ReviewStore } from './db.js';
+import { CATALOG, findConfiguration, getConfigurationOrThrow, getRequiredPlantIds } from './domain/catalog.js';
+import { assertCompleteMatrix, calculateMetrics, validateObservationEntries, roundPercentage } from './domain/metrics.js';
+import { createReviewIdentity } from './domain/reviews.js';
+import { REVIEW_AREAS, type MetricGrain, type ObservationEntry, type OrganismMetric, type ReviewArea, type ReviewSlot, type StoredReviewArea } from './contracts.js';
 
 type AppOptions = {
   store?: ReviewStore;

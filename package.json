@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "api:dev": "tsx api/src/server.ts",
+    "api:dev": "tsx server/src/server.ts",
     "build": "astro check && astro build",
     "preview": "astro preview",
     "test": "vitest run",

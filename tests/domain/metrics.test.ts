@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CONFIGURATIONS, getConfigurationOrThrow, getRequiredCoordinates, ORGANISMS } from '../../api/src/domain/catalog';
-import { calculateMetric, calculateMetrics } from '../../api/src/domain/metrics';
-import type { ObservationEntry } from '../../api/src/contracts';
+import { CONFIGURATIONS, getConfigurationOrThrow, getRequiredCoordinates, ORGANISMS } from '../../server/src/domain/catalog';
+import { calculateMetric, calculateMetrics } from '../../server/src/domain/metrics';
+import type { ObservationEntry } from '../../server/src/contracts';
 
 function completeEntries(configurationId: string, area: 'microbiology' | 'entomology', scoreFor: (index: number) => 0 | 1 | 2 | 3): ObservationEntry[] {
   const configuration = getConfigurationOrThrow(configurationId);

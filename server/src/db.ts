@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import { CATALOG, getConfigurationOrThrow } from './domain/catalog';
-import { assessCompleteness } from './domain/metrics';
-import { assertWeeklySlotAvailable, createCorrectionVersion } from './domain/reviews';
+import { CATALOG, getConfigurationOrThrow } from './domain/catalog.js';
+import { assessCompleteness } from './domain/metrics.js';
+import { assertWeeklySlotAvailable, createCorrectionVersion } from './domain/reviews.js';
 import type {
   MetricProvenance,
   ObservationEntry,
@@ -10,7 +10,7 @@ import type {
   OrganismMetric,
   ReviewArea,
   StoredReviewArea,
-} from './contracts';
+} from './contracts.js';
 
 export type StoredVersion = ReviewVersion & { metrics: readonly OrganismMetric[] };
 export type ReviewRead = ReviewIdentity & {
@@ -93,7 +93,7 @@ export class MemoryStore implements ReviewStore {
   }
 
   async createDraft(identity: ReviewIdentity): Promise<ReviewRead> {
-    const existing = [...this.reviews.values()].map(({ identity: item, versions }) => ({ ...item, status: versions.at(-1)?.status }));
+    const existing = [...this.reviews.values()].map(({ identity: item, versions }) => ({ ...item, status: versions[versions.length - 1]?.status }));
     assertWeeklySlotAvailable(existing, identity);
     const record: MemoryRecord = {
       identity: clone(identity),
@@ -132,7 +132,7 @@ export class MemoryStore implements ReviewStore {
     if (current.status !== 'draft') throw new StoreError('IMMUTABLE', 'Review is already submitted.');
     const existing = [...this.reviews.values()]
       .filter((item) => item.identity.reviewId !== reviewId)
-      .map(({ identity: item, versions }) => ({ ...item, status: versions.at(-1)?.status }));
+      .map(({ identity: item, versions }) => ({ ...item, status: versions[versions.length - 1]?.status }));
     assertWeeklySlotAvailable(existing, record.identity);
     current.status = 'submitted';
     current.submittedAt = new Date().toISOString();

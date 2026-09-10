@@ -1,4 +1,4 @@
-import { DomainValidationError, type Bed, type MonitoringConfiguration, type Organism, type StoredReviewArea } from '../contracts';
+import { DomainValidationError, type Bed, type MonitoringConfiguration, type Organism, type StoredReviewArea } from '../contracts.js';
 
 const ORGANISM_DEFINITIONS = [
   ['cladosporium', 'Cladosporium'],

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { createApp } from '../../api/src/app';
-import { MemoryStore } from '../../api/src/db';
-import { getConfigurationOrThrow, getRequiredCoordinates } from '../../api/src/domain/catalog';
+import { createApp } from '../../server/src/app';
+import { MemoryStore } from '../../server/src/db';
+import { getConfigurationOrThrow, getRequiredCoordinates } from '../../server/src/domain/catalog';
 
 function completeEntries(configurationId: string, area: 'microbiology' | 'entomology' = 'microbiology') {
   const configuration = getConfigurationOrThrow(configurationId);

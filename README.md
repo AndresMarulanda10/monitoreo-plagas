@@ -29,6 +29,8 @@ La clave service role omite RLS y nunca debe llegar al frontend. En modo `supaba
 3. Mantén `PUBLIC_API_BASE_URL` vacío o sin definir para que el frontend use el API same-origin de Vercel. Solo defínelo si el frontend y el API viven en dominios distintos.
 4. Configura también las migraciones Supabase antes de usar el despliegue. La clave `SUPABASE_SECRET_KEY` (o la clave legacy `SUPABASE_SERVICE_ROLE_KEY`) es exclusivamente server-side; nunca la agregues como variable `PUBLIC_*`, al código del frontend ni al repositorio.
 
+El código compartido del API vive en `server/src/`, fuera del directorio reservado `api/`. `api/[...path].ts` es la única función TypeScript de Vercel y adapta ese mismo servidor Fetch; `api/Dockerfile` ejecuta `server/src/server.ts` para conservar el despliegue local con Compose.
+
 ## Verificación
 
 ```bash

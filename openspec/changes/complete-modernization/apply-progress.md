@@ -21,7 +21,7 @@
 |---|---|
 | Focused test command and exact result | `npx vitest tests/domain` — passed; 3 test files and 10 tests passed. |
 | Runtime harness command/scenario and exact result | N/A — this unit contains pure domain functions and SQL migrations only; the API and database runtime harness belong to Work Unit 2. |
-| Rollback boundary | Remove `api/src/contracts.ts`, `api/src/domain/catalog.ts`, `api/src/domain/metrics.ts`, `api/src/domain/reviews.ts`, `tests/domain/metrics.test.ts`, `tests/domain/completeness.test.ts`, `tests/domain/weekly-review.test.ts`, `supabase/types.ts`, `supabase/migrations/001_schema.sql`, `supabase/migrations/002_catalog_seed.sql`, `vitest.config.ts`, and the Vitest package/scripts without reverting frontend or later API work. |
+| Rollback boundary | Remove `server/src/contracts.ts`, `server/src/domain/catalog.ts`, `server/src/domain/metrics.ts`, `server/src/domain/reviews.ts`, `tests/domain/metrics.test.ts`, `tests/domain/completeness.test.ts`, `tests/domain/weekly-review.test.ts`, `supabase/types.ts`, `supabase/migrations/001_schema.sql`, `supabase/migrations/002_catalog_seed.sql`, `vitest.config.ts`, and the Vitest package/scripts without reverting frontend or later API work. |
 
 ## Additional Verification
 

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { createApp } from './src/app';
+import { createApp } from '../server/src/app.js';
 
 const app = createApp();
 
