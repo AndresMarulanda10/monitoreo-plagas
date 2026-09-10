@@ -10,6 +10,14 @@ El camino operativo recomendado es un VPS con Compose, Nginx y Supabase gestiona
 4. Ejecuta `docker compose up -d --build` y espera los health checks de `api` y `frontend`.
 5. Comprueba `/healthz`, `/readyz` y `POST /api/v1/session` (o una sesión autenticada si `AUTH_MODE=supabase`) antes de cambiar el tráfico.
 
+## Vercel
+
+1. Importa el repositorio en Vercel con Astro detectado automáticamente. El frontend estático y `api/[...path].ts` coexisten sin `vercel.json` ni rewrites; la función recibe la ruta completa `/api/v1/*`.
+2. Define en el entorno `Production` de Vercel, sin incluir valores en este repositorio: `AUTH_MODE=open`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SECRET_KEY` y `ALLOWED_ORIGINS`.
+3. Incluye en `ALLOWED_ORIGINS` el dominio Vercel exacto, como `https://<tu-proyecto>.vercel.app`, y cualquier dominio personalizado, separados por comas.
+4. Deja `PUBLIC_API_BASE_URL` vacío o sin definir para usar el API same-origin. Si existe un dominio de API separado, configura su URL pública explícita.
+5. `SUPABASE_SECRET_KEY` y la alternativa legacy `SUPABASE_SERVICE_ROLE_KEY` son secretos server-only. No los expongas mediante `PUBLIC_*`, el frontend, logs o el repositorio.
+
 ## Variables
 
 | Variable | Propósito | Exposición |
