@@ -588,7 +588,11 @@ textarea.native-select { resize: vertical; }
 }
 
 .alert-error { border-color: color-mix(in srgb, var(--severity-3) 45%, var(--border)); background: color-mix(in srgb, var(--severity-3) 8%, var(--card)); color: var(--severity-3); }
+.alert-prominent { border-width: 2px; box-shadow: 0 0 0 3px color-mix(in srgb, var(--severity-3) 14%, transparent); font-size: 0.95rem; }
 .alert-success { border-color: color-mix(in srgb, var(--severity-0) 50%, var(--border)); background: color-mix(in srgb, var(--severity-0) 9%, var(--card)); color: color-mix(in srgb, var(--severity-0) 70%, var(--foreground)); }
+.alert-warning { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); background: color-mix(in srgb, var(--accent) 10%, var(--card)); color: var(--accent-foreground); }
+.danger-button { border-color: color-mix(in srgb, var(--severity-3) 45%, var(--border)); background: color-mix(in srgb, var(--severity-3) 8%, var(--card)); color: var(--severity-3); }
+.danger-button:hover { background: color-mix(in srgb, var(--severity-3) 16%, var(--card)); }
 
 .loading-screen { display: grid; min-height: 100vh; place-items: center; padding: 1rem; }
 

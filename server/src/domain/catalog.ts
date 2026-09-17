@@ -24,9 +24,12 @@ const AREA_ORGANISM_IDS: Record<StoredReviewArea, readonly string[]> = Object.fr
 const CONFIGURATION_DEFINITIONS = [
   ['hortisimulador-tomato', 'Hortisimulador', 'Tomato', 6, 4],
   ['lot-g-strawberry', 'Lot G', 'Strawberry', 15, 5],
-  ['lot-g-blueberry', 'Lot G', 'Blueberry', 2, 4],
+  ['lot-g-blueberry', 'Lot G', 'Blueberry', 3, 4],
   ['lot-f-cucumber', 'Lot F', 'Cucumber', 2, 15],
   ['lot-f-tomato', 'Lot F', 'Tomato', 5, 15],
+  ['lot-e-kale-liso', 'Lote E', 'Kale liso', 7, 2],
+  ['lot-e-kale-crespo', 'Lote E', 'Kale crespo', 7, 2],
+  ['lot-e-kale-crespo-morado', 'Lote E', 'Kale crespo morado', 7, 2],
 ] as const;
 
 function buildBeds(configurationId: string, bedCount: number, plantsPerBed: number): readonly Bed[] {

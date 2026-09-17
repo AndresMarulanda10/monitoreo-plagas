@@ -97,6 +97,18 @@ export function assertCompleteMatrix(
   }
 }
 
+export function getCompletePlantIds(
+  configuration: MonitoringConfiguration,
+  area: StoredReviewArea,
+  entries: readonly ObservationEntry[],
+  plantIds: readonly string[] = getRequiredPlantIds(configuration),
+): readonly string[] {
+  validateObservationEntries(configuration, area, entries);
+  const organisms = getOrganismsForArea(area);
+  const present = new Set(entries.map((entry) => observationKey(entry.plantId, entry.organismId)));
+  return plantIds.filter((plantId) => organisms.every((organism) => present.has(observationKey(plantId, organism.id))));
+}
+
 export function isCompleteMatrix(configuration: MonitoringConfiguration, area: StoredReviewArea, entries: readonly ObservationEntry[]): boolean {
   return assessCompleteness(configuration, area, entries).complete;
 }
@@ -116,8 +128,7 @@ export type CalculateMetricsInput = {
   calculatedAt?: string;
 };
 
-export function calculateMetrics(input: CalculateMetricsInput): readonly OrganismMetric[] {
-  assertCompleteMatrix(input.configuration, input.area, input.entries);
+function calculateMetricsForScope(input: CalculateMetricsInput): readonly OrganismMetric[] {
   const inspectedPlantIds = input.plantIds ?? getRequiredPlantIds(input.configuration);
   const configuredPlantIds = new Set(getRequiredPlantIds(input.configuration));
   if (inspectedPlantIds.some((plantId) => !configuredPlantIds.has(plantId))) {
@@ -155,6 +166,23 @@ export function calculateMetrics(input: CalculateMetricsInput): readonly Organis
       severityPercent: (severityNumerator / severityDenominator) * 100,
     };
   });
+}
+
+export function calculateMetrics(input: CalculateMetricsInput): readonly OrganismMetric[] {
+  assertCompleteMatrix(input.configuration, input.area, input.entries);
+  return calculateMetricsForScope(input);
+}
+
+export function calculateMetricsForCompletePlants(input: CalculateMetricsInput): readonly OrganismMetric[] {
+  const requestedPlantIds = input.plantIds ?? getRequiredPlantIds(input.configuration);
+  const completePlantIds = getCompletePlantIds(input.configuration, input.area, input.entries, requestedPlantIds);
+  if (completePlantIds.length !== requestedPlantIds.length) {
+    throw new DomainValidationError('INCOMPLETE_MATRIX', 'Every plant and organism entry is required for the selected metric scope.', {
+      expected: requestedPlantIds.length * getOrganismsForArea(input.area).length,
+      actual: completePlantIds.length * getOrganismsForArea(input.area).length,
+    });
+  }
+  return calculateMetricsForScope({ ...input, plantIds: completePlantIds });
 }
 
 export function calculateMetric(input: CalculateMetricsInput, organismId: string): OrganismMetric {

@@ -1,4 +1,5 @@
 import { createServer, type Server } from 'node:http';
+import { PassThrough } from 'node:stream';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 let server: Server;
@@ -26,6 +27,33 @@ afterAll(async () => {
 });
 
 describe('Vercel Node adapter', () => {
+  it('uses a parsed Vercel body and returns validation errors promptly', async () => {
+    const chunks: Buffer[] = [];
+    const output = new PassThrough();
+    output.on('data', (chunk: Buffer) => chunks.push(chunk));
+    let status: number | undefined;
+    const outgoing = output as unknown as Parameters<typeof handler>[1];
+    outgoing.writeHead = ((statusCode: number) => {
+      status = statusCode;
+      return outgoing;
+    }) as Parameters<typeof handler>[1]['writeHead'];
+
+    const incoming = {
+      method: 'POST',
+      url: '/api/v1/reviews/drafts',
+      headers: { host: 'localhost', 'content-type': 'application/json' },
+      body: {},
+    } as Parameters<typeof handler>[0];
+
+    await Promise.race([
+      handler(incoming, outgoing),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Vercel adapter timed out')), 500)),
+    ]);
+
+    expect(status).toBe(422);
+    expect(JSON.parse(Buffer.concat(chunks).toString())).toMatchObject({ code: 'INVALID_REQUEST' });
+  });
+
   it('preserves request streaming, API paths, CORS, and response bodies', async () => {
     const session = await fetch(`${baseUrl}/api/v1/session`, {
       method: 'POST',

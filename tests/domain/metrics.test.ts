@@ -13,13 +13,16 @@ function completeEntries(configurationId: string, area: 'microbiology' | 'entomo
 }
 
 describe('metrics domain', () => {
-  it('keeps the approved five-configuration and eight-organism catalog baseline', () => {
+  it('keeps the approved catalog dimensions and eight-organism baseline', () => {
     expect(CONFIGURATIONS.map(({ id, bedCount, plantsPerBed }) => [id, bedCount, plantsPerBed])).toEqual([
       ['hortisimulador-tomato', 6, 4],
       ['lot-g-strawberry', 15, 5],
-      ['lot-g-blueberry', 2, 4],
+      ['lot-g-blueberry', 3, 4],
       ['lot-f-cucumber', 2, 15],
       ['lot-f-tomato', 5, 15],
+      ['lot-e-kale-liso', 7, 2],
+      ['lot-e-kale-crespo', 7, 2],
+      ['lot-e-kale-crespo-morado', 7, 2],
     ]);
     expect(ORGANISMS.map((organism) => organism.name)).toEqual([
       'Cladosporium',
@@ -31,6 +34,12 @@ describe('metrics domain', () => {
       'Tuta',
       'Plutella',
     ]);
+    expect(getConfigurationOrThrow('lot-g-blueberry').beds).toHaveLength(3);
+    for (const id of ['lot-e-kale-liso', 'lot-e-kale-crespo', 'lot-e-kale-crespo-morado']) {
+      const configuration = getConfigurationOrThrow(id);
+      expect(configuration.beds).toHaveLength(7);
+      expect(configuration.beds.every((bed) => bed.plantIds.length === 2)).toBe(true);
+    }
   });
 
   it('calculates incidence from affected plants and severity over all inspected plants', () => {

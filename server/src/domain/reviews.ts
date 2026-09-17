@@ -42,7 +42,7 @@ export function assertWeeklySlotAvailable(existingReviews: readonly ReviewWithId
   if (duplicate) {
     const message = duplicate.status === 'draft'
       ? 'Ya existe un borrador para esta configuración, semana y ronda. Abre el borrador existente en lugar de crear otro.'
-      : 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana.';
+      : 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana';
     throw new DomainValidationError('DUPLICATE_REVIEW_SLOT', message, {
       configurationId: candidate.configurationId,
       area: candidate.area,

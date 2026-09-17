@@ -11,6 +11,14 @@ export type Review = { reviewId: string; area: StoredReviewArea; configurationId
 export type Catalog = { configurations: Configuration[]; organisms: Organism[] };
 export type ReviewDraft = { reviewId: string; area: EntryArea; configurationId: string; reviewWeek: string; reviewDate: string; slot: 1 | 2; status: 'draft'; currentVersion: number; completion: { complete: boolean; expected: number; actual: number; missing: { plantId: string; organismId: string }[] } };
 
+const PROJECT_CONFIG_FAILURE = /failed to get project config|project config|project configuration|configuration provider/i;
+export function userFacingErrorMessage(code: unknown, message: unknown): string {
+  const raw = typeof message === 'string' ? message : '';
+  if (code === 'DUPLICATE_REVIEW_SLOT' && /revisión enviada/i.test(raw)) return 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana';
+  if (code === 'DATABASE_NOT_READY' || PROJECT_CONFIG_FAILURE.test(raw)) return 'No se pudo cargar la configuración del proyecto. Intenta nuevamente más tarde o contacta al administrador.';
+  return raw || 'No fue posible completar la solicitud.';
+}
+
 const CROP_LABELS: Record<string, string> = { Tomato: 'Tomate', Strawberry: 'Fresa', Blueberry: 'Arándano', Cucumber: 'Pepino' };
 const ORGANISM_LABELS: Record<string, string> = { Aphids: 'Áfidos', Thrips: 'Trips', Mites: 'Ácaros' };
 const AREA_ORGANISM_IDS: Record<EntryArea, readonly string[]> = { microbiology: ['cladosporium', 'mildeo', 'botrytis'], entomology: ['aphids', 'thrips', 'mites', 'tuta', 'plutella'] };
@@ -32,7 +40,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const payload = contentType.includes('json') ? await response.json() : await response.text();
   if (!response.ok) {
     const error = payload as { code?: string; message?: string; details?: Record<string, unknown> };
-    throw Object.assign(new Error(error.message ?? 'No fue posible completar la solicitud.'), { code: error.code, details: error.details });
+    const rawMessage = typeof payload === 'string' ? payload : error.message;
+    throw Object.assign(new Error(userFacingErrorMessage(error.code, rawMessage)), { code: error.code, details: error.details });
   }
   return payload as T;
 }
@@ -42,6 +51,7 @@ export const api = {
   catalog: () => request<{ data: Catalog }>('/catalog'),
   drafts: (area?: EntryArea) => request<{ data: ReviewDraft[] }>(`/reviews/drafts${area ? `?area=${area}` : ''}`),
   createDraft: (input: { area: EntryArea; configurationId: string; reviewWeek: string; reviewDate: string; slot: 1 | 2 }) => request<{ data: Review }>('/reviews/drafts', { method: 'POST', body: JSON.stringify(input) }),
+  deleteDraft: (id: string) => request<{ data: { reviewId: string; status: 'deleted'; confirmation: string } }>(`/reviews/${id}`, { method: 'DELETE' }),
   review: (id: string) => request<{ data: Review }>(`/reviews/${id}`),
   save: (id: string, version: number, entries: ObservationEntry[]) => request<{ data: Review }>(`/reviews/${id}/observations`, { method: 'PUT', body: JSON.stringify({ version, entries }) }),
   submit: (id: string, version: number) => request<{ data: { metrics: Metric[]; confirmation: string }; review: Review }>(`/reviews/${id}/submit`, { method: 'POST', body: JSON.stringify({ version }) }),

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../../server/src/app';
 import { MemoryStore } from '../../server/src/db';
 import { getConfigurationOrThrow, getRequiredCoordinates } from '../../server/src/domain/catalog';
+import { calculateMetrics } from '../../server/src/domain/metrics';
 
 function completeEntries(configurationId: string, area: 'microbiology' | 'entomology' = 'microbiology') {
   const configuration = getConfigurationOrThrow(configurationId);
@@ -67,11 +68,15 @@ describe('versioned monitoring API', () => {
 
     const entries = completeEntries('lot-g-blueberry');
     const saved = await jsonRequest(app, `/api/v1/reviews/${reviewId}/observations`, { method: 'PUT', headers, body: JSON.stringify({ version: 1, entries }) });
-    expect(saved.body.data.completion).toMatchObject({ complete: true, expected: 24, actual: 24 });
+    expect(saved.body.data.completion).toMatchObject({ complete: true, expected: 36, actual: 36 });
     const submitted = await jsonRequest(app, `/api/v1/reviews/${reviewId}/submit`, { method: 'POST', headers, body: JSON.stringify({ version: 1 }) });
     expect(submitted.response.status).toBe(200);
     expect(submitted.body.data).toMatchObject({ status: 'submitted', version: 1 });
     expect(submitted.body.data.metrics).toHaveLength(3);
+
+    const duplicateSubmitted = await jsonRequest(app, '/api/v1/reviews/drafts', { method: 'POST', headers, body: JSON.stringify({ area: 'microbiology', configurationId: 'lot-g-blueberry', reviewWeek: '2026-08-31', reviewDate: '2026-09-01', slot: 1 }) });
+    expect(duplicateSubmitted.response.status).toBe(409);
+    expect(duplicateSubmitted.body).toMatchObject({ code: 'DUPLICATE_REVIEW_SLOT', message: 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana' });
 
     const correction = await jsonRequest(app, `/api/v1/reviews/${reviewId}/corrections`, { method: 'POST', headers, body: JSON.stringify({ baseVersion: 1, reason: 'Corrección de campo', entries: entries.map((entry) => ({ ...entry, severity: 0 })) }) });
     expect(correction.response.status).toBe(201);
@@ -96,7 +101,7 @@ describe('versioned monitoring API', () => {
 
     const drafts = await jsonRequest(app, '/api/v1/reviews/drafts', { headers });
     expect(drafts.response.status).toBe(200);
-    expect(drafts.body.data).toEqual([expect.objectContaining({ reviewId: first.body.data.reviewId, area: 'microbiology', configurationId: input.configurationId, reviewWeek: input.reviewWeek, reviewDate: input.reviewDate, slot: 1, status: 'draft', currentVersion: 1, completion: expect.objectContaining({ complete: false, expected: 24, actual: 0 }) })]);
+    expect(drafts.body.data).toEqual([expect.objectContaining({ reviewId: first.body.data.reviewId, area: 'microbiology', configurationId: input.configurationId, reviewWeek: input.reviewWeek, reviewDate: input.reviewDate, slot: 1, status: 'draft', currentVersion: 1, completion: expect.objectContaining({ complete: false, expected: 36, actual: 0 }) })]);
     expect(drafts.body.data[0]).not.toHaveProperty('observerId');
     const opened = await jsonRequest(app, `/api/v1/reviews/${first.body.data.reviewId}`, { headers });
     expect(opened.response.status).toBe(200);
@@ -135,6 +140,36 @@ describe('versioned monitoring API', () => {
     expect(areaDashboard.body.data.consolidated.every((row: { area: string }) => row.area === 'microbiology')).toBe(true);
     expect(areaDashboard.body.data.kpis.every((row: { area: string }) => row.area === 'microbiology')).toBe(true);
     expect(combinedDashboard.body.data.consolidated.map((row: { area: string }) => row.area)).toEqual(expect.arrayContaining(['microbiology', 'entomology']));
+  });
+
+  it('advertises DELETE in the API CORS preflight', async () => {
+    const app = createApp({ store: new MemoryStore(), allowedOrigins: ['http://localhost:4321'] });
+    const response = await app(new Request('http://localhost/api/v1/reviews/example', { method: 'OPTIONS', headers: { Origin: 'http://localhost:4321' } }));
+    expect(response.status).toBe(204);
+    expect(response.headers.get('access-control-allow-methods')).toContain('DELETE');
+  });
+
+  it('deletes only owned drafts and rejects submitted review deletion', async () => {
+    const app = createApp({
+      store: new MemoryStore(),
+      auth: async (request) => ({ id: request.headers.get('x-test-user') ?? 'owner', email: 'test@example.com' }),
+    });
+    const headers = { 'x-test-user': 'owner' };
+    const input = { area: 'microbiology', configurationId: 'lot-g-blueberry', reviewWeek: '2026-08-31', reviewDate: '2026-09-01', slot: 1 };
+    const draft = await jsonRequest(app, '/api/v1/reviews/drafts', { method: 'POST', headers, body: JSON.stringify(input) });
+    const unauthorized = await jsonRequest(app, `/api/v1/reviews/${draft.body.data.reviewId}`, { method: 'DELETE', headers: { 'x-test-user': 'other-user' } });
+    expect(unauthorized.response.status).toBe(403);
+    const deleted = await jsonRequest(app, `/api/v1/reviews/${draft.body.data.reviewId}`, { method: 'DELETE', headers });
+    expect(deleted.response.status).toBe(200);
+    expect((await jsonRequest(app, `/api/v1/reviews/${draft.body.data.reviewId}`, { headers })).response.status).toBe(404);
+
+    const submittedDraft = await jsonRequest(app, '/api/v1/reviews/drafts', { method: 'POST', headers, body: JSON.stringify({ ...input, slot: 2 }) });
+    const entries = completeEntries(input.configurationId);
+    await jsonRequest(app, `/api/v1/reviews/${submittedDraft.body.data.reviewId}/observations`, { method: 'PUT', headers, body: JSON.stringify({ version: 1, entries }) });
+    await jsonRequest(app, `/api/v1/reviews/${submittedDraft.body.data.reviewId}/submit`, { method: 'POST', headers, body: JSON.stringify({ version: 1 }) });
+    const immutable = await jsonRequest(app, `/api/v1/reviews/${submittedDraft.body.data.reviewId}`, { method: 'DELETE', headers });
+    expect(immutable.response.status).toBe(409);
+    expect(immutable.body.code).toBe('IMMUTABLE');
   });
 
   it('keeps dashboard, pagination, and CSV behind identical filters', async () => {
@@ -184,7 +219,7 @@ describe('versioned monitoring API', () => {
     const response = await jsonRequest(app, '/api/v1/dashboard?area=microbiology&configurationId=lot-g-blueberry&crop=Blueberry&organismId=cladosporium', { headers });
     expect(response.body.data.count).toBe(2);
     expect(response.body.data.trends.map((trend: { slot: number }) => trend.slot).sort()).toEqual([1, 2]);
-    expect(response.body.data.consolidated).toHaveLength(4);
+    expect(response.body.data.consolidated).toHaveLength(6);
     expect(response.body.data.consolidated).toEqual(expect.arrayContaining([
       expect.objectContaining({ lotName: 'Lot G', cropName: 'Blueberry', slot: 1, bed: 1, metric: expect.objectContaining({ incidencePercent: 100, severityPercent: 33, incidenceDenominator: 4, severityDenominator: 12 }) }),
       expect.objectContaining({ lotName: 'Lot G', cropName: 'Blueberry', slot: 2, bed: 2, metric: expect.objectContaining({ incidencePercent: 100, severityPercent: 100, incidenceDenominator: 4, severityDenominator: 12 }) }),
@@ -192,5 +227,34 @@ describe('versioned monitoring API', () => {
 
     const observations = await jsonRequest(app, '/api/v1/observations?configurationId=lot-g-blueberry&organismId=cladosporium&limit=1', { headers });
     expect([1, 2]).toContain(observations.body.data[0].slot);
+  });
+
+  it('reports a submitted Blueberry review recorded before bed 3 existed', async () => {
+    const store = new MemoryStore();
+    const app = createApp({ store });
+    const session = await jsonRequest(app, '/api/v1/session', { method: 'POST', body: '{}' });
+    const headers = { Cookie: session.response.headers.get('set-cookie')! };
+    const draft = await jsonRequest(app, '/api/v1/reviews/drafts', { method: 'POST', headers, body: JSON.stringify({ area: 'microbiology', configurationId: 'lot-g-blueberry', reviewWeek: '2026-08-31', reviewDate: '2026-09-01', slot: 1 }) });
+    const reviewId = draft.body.data.reviewId;
+    const currentConfiguration = getConfigurationOrThrow('lot-g-blueberry');
+    const historicalConfiguration = { ...currentConfiguration, bedCount: 2, beds: currentConfiguration.beds.slice(0, 2) };
+    const entries = getRequiredCoordinates(historicalConfiguration, 'microbiology').map(({ plantId, organismId }) => ({ plantId, organismId, severity: 0 as const }));
+    await store.saveDraft(reviewId, 'demo-observer', 1, entries);
+    const metrics = calculateMetrics({ configuration: historicalConfiguration, area: 'microbiology', reviewId, version: 1, entries });
+    await store.submitReview(reviewId, 'demo-observer', 1, metrics);
+
+    const dashboard = await jsonRequest(app, '/api/v1/dashboard?configurationId=lot-g-blueberry', { headers });
+    expect(dashboard.response.status).toBe(200);
+    expect(dashboard.body.data.kpis[0]).toMatchObject({ incidenceDenominator: 8, severityDenominator: 24 });
+    expect(dashboard.body.data.consolidated).toHaveLength(6);
+    expect(dashboard.body.data.consolidated.every((row: { bed: number }) => row.bed !== 3)).toBe(true);
+
+    const observations = await jsonRequest(app, '/api/v1/observations?configurationId=lot-g-blueberry', { headers });
+    expect(observations.response.status).toBe(200);
+    expect(observations.body.data).toHaveLength(24);
+    expect(observations.body.data.every((row: { bed: number }) => row.bed !== 3)).toBe(true);
+    const csv = await app(new Request('http://localhost/api/v1/exports/reviews.csv?configurationId=lot-g-blueberry', { headers }));
+    expect(csv.status).toBe(200);
+    expect(await csv.text()).not.toContain('lot-g-blueberry-bed-3');
   });
 });

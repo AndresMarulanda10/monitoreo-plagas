@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { asEntries, calculateProgress } from '../../src/components/MonitoringForm';
+import { asEntries, calculateProgress, reviewProgressMessage } from '../../src/components/MonitoringForm';
 import { getConfigurationOrThrow } from '../../server/src/domain/catalog';
 
 describe('frontend matrix adapter', () => {
@@ -19,8 +19,14 @@ describe('frontend matrix adapter', () => {
     ])) as Record<string, 0 | 1 | 2 | 3>;
     const progress = calculateProgress(configuration, ['cladosporium', 'mildeo', 'botrytis'].map((id) => ({ id, name: id })), values);
 
-    expect(progress).toMatchObject({ expectedBeds: 2, expectedPlants: 8, inspectedPlants: 4, expectedOrganisms: 3, expectedCoordinates: 24, actualCoordinates: 12, complete: false });
+    expect(progress).toMatchObject({ expectedBeds: 3, expectedPlants: 12, inspectedPlants: 4, expectedOrganisms: 3, expectedCoordinates: 36, actualCoordinates: 12, complete: false });
     expect(progress.beds[0]).toMatchObject({ bedNumber: 1, inspectedPlants: 4, actualCoordinates: 12, complete: true });
     expect(progress.beds[1]).toMatchObject({ bedNumber: 2, inspectedPlants: 0, actualCoordinates: 0, complete: false });
+    expect(progress.beds[2]).toMatchObject({ bedNumber: 3, inspectedPlants: 0, actualCoordinates: 0, complete: false });
+  });
+
+  it('explains what remains incomplete or confirms a complete matrix', () => {
+    expect(reviewProgressMessage({ complete: false, expectedCoordinates: 36, actualCoordinates: 12 })).toBe('Faltan 24 registros. Completa la matriz antes de enviar.');
+    expect(reviewProgressMessage({ complete: true, expectedCoordinates: 36, actualCoordinates: 36 })).toContain('Matriz completa');
   });
 });

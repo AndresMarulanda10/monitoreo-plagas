@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { createSupabaseAuthResolver, cookieHeader, readCookie, signInSupabase, type AuthResolver, type AuthUser } from './auth.js';
-import { createStore, StoreError, type ReviewRead, type ReviewStore } from './db.js';
+import { createStore, DATABASE_NOT_READY_MESSAGE, StoreError, type ReviewRead, type ReviewStore } from './db.js';
 import { CATALOG, findConfiguration, getConfigurationOrThrow, getRequiredPlantIds } from './domain/catalog.js';
-import { assertCompleteMatrix, calculateMetrics, validateObservationEntries, roundPercentage } from './domain/metrics.js';
+import { assertCompleteMatrix, calculateMetrics, calculateMetricsForCompletePlants, getCompletePlantIds, validateObservationEntries, roundPercentage } from './domain/metrics.js';
 import { createReviewIdentity } from './domain/reviews.js';
 import { REVIEW_AREAS, type MetricGrain, type ObservationEntry, type OrganismMetric, type ReviewArea, type ReviewSlot, type StoredReviewArea } from './contracts.js';
 
@@ -55,7 +55,7 @@ export function createApp(options: AppOptions = {}): (request: Request) => Promi
     if (request.method === 'OPTIONS' && url.pathname.startsWith('/api/v1/')) {
       if (origin && !corsOrigin) return json({ code: 'CSRF_FAILED', message: 'Origin is not allowed.', details: {} }, 403, commonHeaders);
       commonHeaders.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-CSRF-Token');
-      commonHeaders.set('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
+      commonHeaders.set('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
       return new Response(null, { status: 204, headers: commonHeaders });
     }
 
@@ -139,6 +139,10 @@ async function route(request: Request, url: URL, user: AuthUser, store: ReviewSt
   }
   const reviewMatch = path.match(/^\/reviews\/([^/]+)$/);
   if (reviewMatch && request.method === 'GET') return { body: { data: await store.getReview(reviewMatch[1], user.id) }, status: 200 };
+  if (reviewMatch && request.method === 'DELETE') {
+    await store.deleteDraft(reviewMatch[1], user.id);
+    return { body: { data: { reviewId: reviewMatch[1], status: 'deleted', confirmation: 'Borrador eliminado correctamente.' } }, status: 200 };
+  }
   const observationMatch = path.match(/^\/reviews\/([^/]+)\/observations$/);
   if (observationMatch && request.method === 'PUT') {
     const input = await bodyOf(request);
@@ -215,10 +219,13 @@ function scopedPlantIds(configurationId: string, bed?: string): readonly string[
 
 function reviewMetrics(review: ReviewRead, filters: Filters): readonly OrganismMetric[] {
   const configuration = getConfigurationOrThrow(review.configurationId);
+  const persistedReviewMetrics = filters.bed ? [] : review.version.metrics.filter((metric) => metric.grain === 'review');
+  if (persistedReviewMetrics.length > 0) return persistedReviewMetrics.filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
   const plantIds = scopedPlantIds(review.configurationId, filters.bed);
-  if (plantIds.length === 0) return [];
+  const completePlantIds = getCompletePlantIds(configuration, review.area, review.version.entries, plantIds);
+  if (completePlantIds.length === 0) return [];
   const grain: MetricGrain = filters.bed ? 'bed' : 'review';
-  return calculateMetrics({ configuration, area: review.area, reviewId: review.reviewId, version: review.currentVersion, entries: review.version.entries, plantIds, grain, calculatedAt: review.version.metrics[0]?.calculatedAt }).filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
+  return calculateMetricsForCompletePlants({ configuration, area: review.area, reviewId: review.reviewId, version: review.currentVersion, entries: review.version.entries, plantIds: completePlantIds, grain, calculatedAt: review.version.metrics[0]?.calculatedAt }).filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
 }
 
 type ObservationRow = { reviewId: string; version: number; area: StoredReviewArea; reviewDate: string; reviewWeek: string; slot: ReviewSlot; configurationId: string; lotName: string; cropName: string; bed: number; plantId: string; organismId: string; organismName: string; severity: number; metric: ReturnType<typeof presentMetric> };
@@ -263,13 +270,15 @@ function consolidatedRows(reviews: readonly ReviewRead[], filters: Filters) {
       ? configuration.beds.filter((item) => item.id === filters.bed || String(item.number) === filters.bed)
       : configuration.beds;
     for (const bed of beds) {
-      const metrics = calculateMetrics({
+      const completePlantIds = getCompletePlantIds(configuration, review.area, review.version.entries, bed.plantIds);
+      if (completePlantIds.length === 0) continue;
+      const metrics = calculateMetricsForCompletePlants({
         configuration,
         area: review.area,
         reviewId: review.reviewId,
         version: review.currentVersion,
         entries: review.version.entries,
-        plantIds: bed.plantIds,
+        plantIds: completePlantIds,
         grain: 'bed',
         calculatedAt: review.version.metrics[0]?.calculatedAt,
       }).filter((metric) => !filters.organismId || metric.organismId === filters.organismId);
@@ -348,7 +357,7 @@ function handleError(error: unknown, headers: Headers): Response {
   if (error instanceof StoreError) {
     const map = { NOT_FOUND: ['NOT_FOUND', 404], FORBIDDEN: ['FORBIDDEN', 403], STALE_VERSION: ['STALE_VERSION', 409], IMMUTABLE: ['IMMUTABLE', 409], DUPLICATE_REVIEW_SLOT: ['DUPLICATE_REVIEW_SLOT', 409], DATABASE_NOT_READY: ['DATABASE_NOT_READY', 503] } as const;
     const [code, status] = map[error.code];
-    return json({ code, message: error.message, details: error.details }, status, headers);
+    return json({ code, message: error.code === 'DATABASE_NOT_READY' ? DATABASE_NOT_READY_MESSAGE : error.message, details: error.details }, status, headers);
   }
   if (error instanceof Error && error.name === 'DomainValidationError') {
     const domain = error as Error & { code: string; details: Record<string, unknown> };

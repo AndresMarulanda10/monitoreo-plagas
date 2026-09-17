@@ -34,6 +34,7 @@ export interface ReviewStore {
   getCatalog(): Promise<typeof CATALOG>;
   ready(): Promise<boolean>;
   createDraft(identity: ReviewIdentity): Promise<ReviewRead>;
+  deleteDraft(reviewId: string, userId: string): Promise<void>;
   getReview(reviewId: string, userId: string): Promise<ReviewRead>;
   saveDraft(reviewId: string, userId: string, version: number, entries: readonly ObservationEntry[]): Promise<ReviewRead>;
   submitReview(reviewId: string, userId: string, version: number, metrics: readonly OrganismMetric[]): Promise<ReviewRead>;
@@ -104,6 +105,14 @@ export class MemoryStore implements ReviewStore {
     return reviewRead(record.identity, record.versions, record.currentVersion);
   }
 
+  async deleteDraft(reviewId: string, userId: string): Promise<void> {
+    const record = this.owned(reviewId, userId);
+    const current = record.versions.find((item) => item.version === record.currentVersion);
+    if (!current) throw new StoreError('NOT_FOUND', 'Review version not found.');
+    if (current.status !== 'draft') throw new StoreError('IMMUTABLE', 'Submitted reviews cannot be deleted.');
+    this.reviews.delete(reviewId);
+  }
+
   private owned(reviewId: string, userId: string): MemoryRecord {
     const record = this.reviews.get(reviewId);
     if (!record) throw new StoreError('NOT_FOUND', 'Review not found.');
@@ -172,6 +181,24 @@ export class MemoryStore implements ReviewStore {
 }
 
 type SupabaseRow = Record<string, unknown>;
+type SupabaseError = { message: string; code?: string };
+export const DATABASE_NOT_READY_MESSAGE = 'No se pudo cargar la configuración del proyecto. Intenta nuevamente más tarde o contacta al administrador.';
+
+export function mapSupabaseError(error: SupabaseError): StoreError {
+  if (error.code === 'PGRST116') return new StoreError('NOT_FOUND', 'Review not found.');
+  const projectConfigFailure = /failed to get project config|project config|project configuration|configuration provider/i.test(error.message);
+  return new StoreError('DATABASE_NOT_READY', projectConfigFailure ? DATABASE_NOT_READY_MESSAGE : error.message);
+}
+
+function mapRpcError(error: SupabaseError): StoreError {
+  const message = error.message.toLowerCase();
+  if (message.includes('not found')) return new StoreError('NOT_FOUND', 'Review not found.');
+  if (message.includes('not available') || message.includes('owner')) return new StoreError('FORBIDDEN', 'Review is not available to this user.');
+  if (message.includes('immutable') || message.includes('submitted review')) return new StoreError('IMMUTABLE', 'Submitted reviews cannot be deleted.');
+  if (message.includes('stale')) return new StoreError('STALE_VERSION', 'Review version is stale.');
+  if (message.includes('reviews_one_submitted_slot') || message.includes('reviews_one_slot') || message.includes('reviews_one_area_slot')) return new StoreError('DUPLICATE_REVIEW_SLOT', 'Ya existe una revisión para esta configuración, semana y ronda. Revisa la lista de borradores y abre el existente si aparece.');
+  return mapSupabaseError(error);
+}
 
 export class SupabaseStore implements ReviewStore {
   // Supabase's generated schema is intentionally kept in supabase/types.ts; the adapter
@@ -185,9 +212,9 @@ export class SupabaseStore implements ReviewStore {
     });
   }
 
-  private async query<T>(promise: PromiseLike<{ data: T | null; error: { message: string } | null }>): Promise<T> {
+  private async query<T>(promise: PromiseLike<{ data: T | null; error: SupabaseError | null }>): Promise<T> {
     const { data, error } = await promise;
-    if (error) throw new StoreError('DATABASE_NOT_READY', error.message);
+    if (error) throw mapSupabaseError(error);
     return data as T;
   }
 
@@ -264,7 +291,7 @@ export class SupabaseStore implements ReviewStore {
       const existingStatus = String(existing[0].status) === 'draft' ? 'draft' : 'submitted';
       const message = existingStatus === 'draft'
         ? 'Ya existe un borrador para esta configuración, semana y ronda. Abre el borrador existente en lugar de crear otro.'
-        : 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana.';
+        : 'Ya existe una revisión enviada para esta configuración, semana y ronda. Selecciona otra ronda o semana';
       throw new StoreError('DUPLICATE_REVIEW_SLOT', message, {
         existingReviewId: String(existing[0].id),
         existingStatus,
@@ -287,8 +314,16 @@ export class SupabaseStore implements ReviewStore {
 
   async getReview(reviewId: string, userId: string): Promise<ReviewRead> { return this.read(reviewId, userId); }
 
+  async deleteDraft(reviewId: string, userId: string): Promise<void> {
+    const result = await this.client.rpc('delete_review_draft' as never, {
+      p_review_id: reviewId, p_user_id: userId,
+    } as never);
+    if (result.error) throw mapRpcError(result.error);
+  }
+
   async saveDraft(reviewId: string, userId: string, version: number, entries: readonly ObservationEntry[]): Promise<ReviewRead> {
-    const current = await this.query<SupabaseRow>(this.client.from('reviews').select('current_version').eq('id', reviewId).eq('observer_id', userId).single());
+    const current = await this.query<SupabaseRow>(this.client.from('reviews').select('current_version, status').eq('id', reviewId).eq('observer_id', userId).single());
+    if (String(current.status) === 'submitted') throw new StoreError('IMMUTABLE', 'Submitted review versions cannot be edited.');
     if (Number(current.current_version) !== version) throw new StoreError('STALE_VERSION', 'Draft version is stale.');
     await this.query(this.client.from('observations').delete().eq('review_id', reviewId).eq('version', version));
     if (entries.length) await this.query(this.client.from('observations').insert(entries.map((entry) => ({ review_id: reviewId, version, plant_id: entry.plantId, organism_id: entry.organismId, severity: entry.severity }))));
@@ -300,7 +335,7 @@ export class SupabaseStore implements ReviewStore {
       p_review_id: reviewId, p_user_id: userId, p_version: version,
       p_metrics: metrics.map(metricToRow),
     } as never);
-    if (result.error) throw new StoreError(result.error.message.includes('stale') ? 'STALE_VERSION' : result.error.message.includes('reviews_one_submitted_slot') || result.error.message.includes('reviews_one_slot') || result.error.message.includes('reviews_one_area_slot') ? 'DUPLICATE_REVIEW_SLOT' : 'DATABASE_NOT_READY', result.error.message);
+    if (result.error) throw mapRpcError(result.error);
     return this.read(reviewId, userId);
   }
 
@@ -309,7 +344,7 @@ export class SupabaseStore implements ReviewStore {
       p_review_id: reviewId, p_user_id: userId, p_base_version: baseVersion, p_reason: reason,
       p_entries: entries, p_metrics: metrics.map(metricToRow),
     } as never);
-    if (result.error) throw new StoreError(result.error.message.includes('stale') ? 'STALE_VERSION' : result.error.message.includes('reviews_one_submitted_slot') || result.error.message.includes('reviews_one_slot') || result.error.message.includes('reviews_one_area_slot') ? 'DUPLICATE_REVIEW_SLOT' : 'DATABASE_NOT_READY', result.error.message);
+    if (result.error) throw mapRpcError(result.error);
     return this.read(reviewId, userId);
   }
 
